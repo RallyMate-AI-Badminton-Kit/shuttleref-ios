@@ -11,7 +11,7 @@ import UIKit
     private let key = "social.clipboard.invites.seen.v1"
     private var policy = ClipboardInvitePolicy(seen: UserDefaults.standard.stringArray(forKey: "social.clipboard.invites.seen.v1") ?? [])
 
-    func becameActive(social: GatheringStore) {
+    func becameActive(social: GatheringStore, app: AppStore) {
         guard !checking else { return }
         #if UI_PREVIEW
         guard ProcessInfo.processInfo.arguments.contains("--social-live-test") else { return }
@@ -45,7 +45,7 @@ import UIKit
                     // UIAlertController dismisses itself after its action handler.
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     guard let current = Self.presenter(), !(current is UIAlertController), UIApplication.shared.applicationState == .active else { return }
-                    let page = ClipboardInvitationPage(code: code).environmentObject(social)
+                    let page = ClipboardInvitationPage(code: code).environmentObject(social).environmentObject(app)
                     let host = UIHostingController(rootView: page)
                     current.present(host, animated: true)
                 }
@@ -97,8 +97,8 @@ private struct ClipboardInvitationPage: View {
                         Text(Date(timeIntervalSince1970: invite.starts_at).formatted())
                         Note(text: invite.remaining > 0 ? "还剩 \(invite.remaining) 个名额" : "已满员，可以报名候补")
                         if let user = social.credentials?.user { Text("以 \(user.name) 的身份加入").font(.caption) }
-                        Button(social.credentials == nil ? "登录后加入" : invite.remaining > 0 ? "加入球局" : "加入候补") {
-                            guard social.credentials != nil else { account = true; return }
+                        Button(social.needsLogin ? "登录后加入" : invite.remaining > 0 ? "加入球局" : "加入候补") {
+                            guard !social.needsLogin else { account = true; return }
                             joining = true; error = ""
                             Task { @MainActor in
                                 defer { joining = false }
@@ -116,7 +116,7 @@ private struct ClipboardInvitationPage: View {
             }.background(Palette.background.ignoresSafeArea())
                 .navigationTitle("球局邀请").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() }.disabled(joining) } }
-                .sheet(isPresented: $account) { GatheringAccount().environmentObject(social) }
+                .sheet(isPresented: $account) { AccountCenter().environmentObject(social) }
                 .task(id: identity) {
                     guard joined == nil else { return }
                     preview = nil; error = ""

@@ -7,7 +7,9 @@ import ThingSmartDeviceKit
 import ThingSmartDeviceCoreKit
 #endif
 
-struct HomeRow: Identifiable { let id: Int64; let name: String }
+struct HomeRow: Identifiable { let id: Int64; let name: String; var role: Int = -999 }
+struct HomeMemberRow: Identifiable { let id: Int64; let name: String; let role: Int }
+struct HomeInviteRow: Identifiable { let id: Int64; let code: String; let hours: Int; let accepted: Bool }
 struct DeviceRow: Identifiable { let id: String; let name: String; let online: Bool }
 
 final class AppStore: NSObject, ObservableObject {
@@ -20,6 +22,13 @@ final class AppStore: NSObject, ObservableObject {
     @Published private(set) var accountRegion = ""
     @Published private(set) var verificationDeadlines: [String: Date] = [:]
     @Published var homes: [HomeRow] = []
+    @Published var homeMembers: [HomeMemberRow] = []
+    @Published var homeInvites: [HomeInviteRow] = []
+    @Published var createdHomeCode = ""
+    @Published var invitedHome: HomeRow?
+    private var previewedHomeCode = ""
+    var canInviteHomeMembers: Bool { homes.first { $0.id == homeID }.map { [1, 2].contains($0.role) } ?? false }
+    var canChangeHome: Bool { !busy && session?.pending == nil && !["a", "p"].contains(session?.current?.state ?? "") }
     @Published var devices: [DeviceRow] = []
     @Published var homeID: Int64?
     @Published var selected: DeviceRow?
@@ -32,6 +41,7 @@ final class AppStore: NSObject, ObservableObject {
     private var observation: AnyCancellable?
     #if !UI_PREVIEW
     private let manager = ThingSmartHomeManager()
+    private let homeInvitation = ThingSmartHomeInvitation()
     private var home: ThingSmartHome?
     private var device: ThingSmartDevice?
     #endif
@@ -153,12 +163,89 @@ final class AppStore: NSObject, ObservableObject {
         manager.getHomeList(success: { [weak self] models in
             self?.finish(id, "家庭已更新") { [weak self] in
                 guard let self = self else { return }
-                self.homes = (models ?? []).map { HomeRow(id: $0.homeId, name: $0.name ?? "我的家庭") }
+                self.homes = (models ?? []).map { HomeRow(id: $0.homeId, name: $0.name ?? "我的家庭", role: $0.role.rawValue) }
                 let remembered = UserDefaults.standard.object(forKey: "ios.home.\(self.accountID)") as? Int64
                 if let home = self.homes.first(where: { $0.id == self.homeID || $0.id == remembered }) ?? self.homes.first { self.loadDevices(home.id) }
                 else { self.homeID = nil; self.clearDevice(); self.devices = []; self.status = "创建家庭，开始添加设备" }
             }
         }, failure: { [weak self] in self?.failure(id,$0) })
+        #endif
+    }
+    func loadHomeMembers() {
+        guard loggedIn, let homeID = homeID, !busy else { return }
+        #if !UI_PREVIEW
+        guard let object = ThingSmartHome(homeId: homeID), let id = begin("正在读取家庭成员…") else { return }
+        object.getMemberList(success: { [weak self] members in
+            self?.finish(id, "家庭成员已更新") { [weak self] in
+                self?.homeMembers = (members ?? []).map { HomeMemberRow(id: $0.memberId, name: $0.name ?? "家庭成员", role: $0.role.rawValue) }
+                self?.loadHomeInvites()
+            }
+        }, failure: { [weak self] in self?.failure(id, $0) })
+        #endif
+    }
+    func loadHomeInvites() {
+        guard loggedIn, canInviteHomeMembers, let homeID = homeID else { return }
+        #if !UI_PREVIEW
+        guard let id = begin("正在读取邀请记录…") else { return }
+        homeInvitation.fetchRecordList(withHomeID: homeID, success: { [weak self] records in
+            self?.finish(id, "家庭邀请已更新") { [weak self] in
+                self?.homeInvites = records.map { HomeInviteRow(id: $0.invitationID.int64Value, code: $0.invitationCode, hours: $0.validTime, accepted: $0.dealStatus.rawValue == 2) }
+            }
+        }, failure: { [weak self] in self?.failure(id, $0) })
+        #endif
+    }
+    func createHomeInvitation() {
+        guard loggedIn, canInviteHomeMembers, let homeID = homeID else { return }
+        #if !UI_PREVIEW
+        guard let id = begin("正在生成家庭邀请码…") else { return }
+        createdHomeCode = ""
+        let request = ThingSmartHomeInvitationCreateRequestModel()
+        request.homeID = homeID; request.role = ThingHomeRoleType(rawValue: 0)!; request.needMsgContent = false
+        homeInvitation.createInvitation(with: request, success: { [weak self] result in
+            self?.finish(id, "邀请码已生成，请只分享给要加入家庭的人") { [weak self] in
+                self?.createdHomeCode = result.invitationCode; self?.loadHomeInvites()
+            }
+        }, failure: { [weak self] in self?.failure(id, $0) })
+        #endif
+    }
+    func cancelHomeInvitation(_ invitation: HomeInviteRow) {
+        guard loggedIn, canInviteHomeMembers else { return }
+        #if !UI_PREVIEW
+        guard let id = begin("正在取消家庭邀请…") else { return }
+        homeInvitation.cancelInvitation(withInvitationID: NSNumber(value: invitation.id), success: { [weak self] ok in
+            self?.finish(id, ok ? "邀请已取消" : "邀请未取消，请刷新核对") { [weak self] in
+                if ok { self?.createdHomeCode = "" }; self?.loadHomeInvites()
+            }
+        }, failure: { [weak self] in self?.failure(id, $0) })
+        #endif
+    }
+    func clearHomeInvitationPreview() { invitedHome = nil; previewedHomeCode = "" }
+    func previewHomeInvitation(_ code: String) {
+        guard loggedIn, !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        #if !UI_PREVIEW
+        guard let id = begin("正在查看家庭邀请…") else { return }
+        clearHomeInvitationPreview()
+        let value = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        homeInvitation.fetchInvitationHomeInfo(withInvitationCode: value, success: { [weak self] model in
+            self?.finish(id, "请核对家庭名称后再加入") { [weak self] in
+                self?.invitedHome = HomeRow(id: model.homeId, name: model.name ?? "受邀家庭")
+                self?.previewedHomeCode = value
+            }
+        }, failure: { [weak self] in self?.failure(id, $0) })
+        #endif
+    }
+    func joinInvitedHome() {
+        guard loggedIn, canChangeHome, let invited = invitedHome, !previewedHomeCode.isEmpty else { return }
+        #if !UI_PREVIEW
+        guard let id = begin("正在加入家庭…") else { return }
+        homeInvitation.joinHome(withInvitationCode: previewedHomeCode, success: { [weak self] ok in
+            self?.finish(id, ok ? "已加入家庭，正在刷新设备" : "加入未确认，请刷新家庭列表核对") { [weak self] in
+                guard let self = self else { return }
+                self.clearHomeInvitationPreview()
+                if ok { self.homeID = invited.id; UserDefaults.standard.set(invited.id, forKey: "ios.home.\(self.accountID)") }
+                self.loadHomes()
+            }
+        }, failure: { [weak self] in self?.failure(id, $0) })
         #endif
     }
     func createHome(_ name: String) {
@@ -173,7 +260,7 @@ final class AppStore: NSObject, ObservableObject {
     func loadDevices(_ homeID: Int64) {
         #if !UI_PREVIEW
         guard let id = begin("正在查询设备…") else { return }
-        clearDevice(); self.homeID = homeID; devices = []
+        clearDevice(); self.homeID = homeID; devices = []; homeMembers = []; homeInvites = []; createdHomeCode = ""
         UserDefaults.standard.set(homeID, forKey: "ios.home.\(accountID)")
         let object = ThingSmartHome(homeId: homeID); home = object
         object?.getDataWithSuccess({ [weak self] _ in
@@ -210,6 +297,7 @@ final class AppStore: NSObject, ObservableObject {
         #if !UI_PREVIEW
         guard let id = begin("正在退出登录…") else { return }
         ThingSmartUser.sharedInstance().loginOut({ [weak self] in self?.finish(id, "已退出登录") { [weak self] in
+            self?.homeMembers = []; self?.homeInvites = []; self?.createdHomeCode = ""; self?.invitedHome = nil; self?.previewedHomeCode = ""
             self?.clearDevice(); self?.homes = []; self?.devices = []; self?.homeID = nil; self?.loggedIn = false; self?.accountID = "guest"; self?.nickname = ""; self?.maskedAccount = ""; self?.identityFingerprint = ""; self?.sessionPresent = false; self?.accountRegion = ""
         } }, failure: { [weak self] in self?.failure(id,$0) })
         #endif

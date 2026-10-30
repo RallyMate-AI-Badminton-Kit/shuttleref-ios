@@ -22,10 +22,24 @@ final class MatchSession: ObservableObject {
             throw NSError(domain: "MatchSettlement", code: 1, userInfo: [NSLocalizedDescriptionKey: "请同步已结束的球局，并选择本场 MVP"])
         }
         guard !completedResults.contains(where: { $0.id == snapshot.id }) else { return }
-        let result = LocalMatchResult(id: snapshot.id, snapshot: snapshot, names: names, doubles: doubles, mvpSlot: mvpSlot, date: Date(), earlyEnded: early)
+        let result = LocalMatchResult(id: snapshot.id, snapshot: snapshot, names: names, doubles: doubles, mvpSlot: mvpSlot, date: Date(), earlyEnded: early, observations: observations.filter { $0.snapshot.id == snapshot.id })
         let data = try JSONEncoder().encode([result] + completedResults)
         defaults.set(data, forKey: key + ".results")
         objectWillChange.send()
+    }
+    private var observations: [MatchObservation] {
+        get {
+            guard let data = defaults.data(forKey: key + ".observations") else { return [] }
+            return (try? JSONDecoder().decode([MatchObservation].self, from: data)) ?? []
+        }
+        set { if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: key + ".observations") } }
+    }
+    private func observe(_ snapshot: MatchSnapshot) {
+        guard snapshot.code == 0, snapshot.hasID, ["a", "p"].contains(snapshot.state) else { return }
+        var values = observations.filter { $0.snapshot.id == snapshot.id }
+        if let last = values.last, last.snapshot.scores == snapshot.scores, last.snapshot.state == snapshot.state { return }
+        values.append(MatchObservation(date: Date(), snapshot: snapshot))
+        observations = Array(values.suffix(600))
     }
     private let key: String
     private let defaults: UserDefaults
@@ -81,6 +95,7 @@ final class MatchSession: ObservableObject {
         guard valid, let s = MatchSnapshot(raw) else { return }
         if let old = current, s.token < old.token { return }
         current = s
+        observe(s)
         if s.state == "p", s.hasID, s.code == 0 { save(s) }
         guard let p = pending, s.token == p.token || s.code == 3 && s.token > p.token else { return }
         timer?.invalidate(); pending = nil
@@ -113,5 +128,12 @@ final class MatchSession: ObservableObject {
 
 struct LocalMatchResult: Codable, Identifiable {
     let id: String; let snapshot: MatchSnapshot; let names: [String]; let doubles: Bool; let mvpSlot: Int?; let date: Date; var earlyEnded: Bool? = nil
+    var observations: [MatchObservation]? = nil
     var mvpName: String { guard let slot = mvpSlot, names.indices.contains(slot) else { return "未评选" }; return names[slot] }
+}
+
+
+struct MatchObservation: Codable {
+    let date: Date
+    let snapshot: MatchSnapshot
 }

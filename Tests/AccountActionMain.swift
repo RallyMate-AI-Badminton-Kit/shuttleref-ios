@@ -13,6 +13,10 @@ import Foundation
         precondition(state.businessAuthorizationBlockReason == "请先同步待上传的组局操作，再授权登录。")
         state.pendingEvents = false; state.pendingRecords = true
         precondition(state.businessAuthorizationBlockReason == "请先同步待上传的战绩，再授权登录。")
+        state.renewingBusinessIdentity = true
+        precondition(state.businessAuthorizationBlockReason == nil, "Same identity must be able to reauthorize with pending records")
+        precondition(state.deviceChangeBlockReason != nil)
+        state.renewingBusinessIdentity = false
         state.pendingRecords = false; state.authorizing = true
         precondition(state.businessAuthorizationBlockReason == "正在授权，请完成或取消本次授权。")
         state.authorizing = false; state.loggedIn = false

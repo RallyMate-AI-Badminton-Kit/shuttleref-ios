@@ -14,7 +14,7 @@
 
 - 球局：首页、准备、单/双打球员布局与姓名、本局比分、撤销、暂存/恢复/放弃、设备结果展示、每日羽签。
 - 战绩：日历翻月/日期与状态筛选、当前设备的本机暂存入口、无数据空态。
-- 教练：羽毛球伙伴、三色/名字/显示设置、问题建议、本机草稿、历史空态。
+- 教练：羽毛球伙伴、三色/名字/显示设置、问题建议、后端文本对话、按账号保存本机历史；DeepSeek Key 待配置，见[链路验证记录](../../docs/product/ios-coach-chat-2026-10-29.md)。
 - 我的：个人资料、三种名片风格、荣誉类别、账号设备入口、高光/出场空态、音效本机偏好。
 - 账号设备：邮箱登录/注册、中国区验证码、家庭创建/查询、设备选择、蓝牙辅助 Wi-Fi 配网。
 
@@ -26,7 +26,7 @@
 
 战绩服务、熟人组局与邀请、MVP 展示以及 OAuth 业务身份关联已有实现。OAuth 真实网页兑换与 SDK 身份一致性已验证；最新原生授权回到 App 后出现请求超时，尚待排查，不能视为真机全链路通过。同步状态与配置说明见 [开发交接](../../docs/handoff/2026-10-26-development-sync.md) 与 [业务授权联调](../../docs/product/business-oauth-local.md)。
 
-媒体完整链路、AI 教练和其他未接入页面仍需继续开发，以具体页面和验证记录为准。
+媒体完整链路和其他未接入页面仍需继续开发。AI 教练基础接线已完成本地验证，真实模型与真机对话待验证，以具体页面和验证记录为准。
 
 ## 新环境准备
 
@@ -77,3 +77,11 @@ swiftc -module-cache-path /private/tmp/shuttleref-swift-cache source/ios/Core/Ma
 ## 熟人组局本地服务
 
 球局首页新增「约朋友打球」。本地 Compose、API 地址配置、数据库迁移、身份恢复和真机清单见 [本地组局说明](../../docs/product/friends-gathering-local.md)。Debug 专用 ATS 允许局域网 HTTP；Release 通过 `SocialAPIOrigin` 注入 HTTPS 地址，`SocialInviteOrigin` 可选。新增源文件后使用上述 Ruby 命令重建工程，并重新 `pod install`。
+
+## 手机作为比赛主机（2026-10-29，底层开发阶段）
+
+新增独立 `PhoneMatchSession`、SQLite 事务存储、拍底 SCORE 协议与模拟 transport；原涂鸦主机模式不变。当前没有开放 UI 或真实 BLE 比赛入口，同步适配器明确不可用。实现范围、测试与后续接线见 [手机计分第一阶段交接](../../docs/handoff/2026-10-29-racket-phone-scoring-app-validation.md)。
+
+```sh
+bash source/ios/Tools/test_phone_score.sh
+```

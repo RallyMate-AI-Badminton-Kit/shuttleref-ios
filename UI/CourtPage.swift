@@ -3,6 +3,25 @@ import SwiftUI
 struct CourtPage: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var social: GatheringStore
+    @EnvironmentObject var rackets: RacketStore
+    @StateObject private var phoneController = PhoneMatchController()
+    @AppStorage("racket.registry.revision") private var associationRevision = ""
+    private var associationContext: RacketContext? {
+        guard let c = social.credentials, social.verifiedBusiness else { return nil }
+        return RacketContext(origin:social.origin,userID:c.user.id,token:c.token,hostID:nil,userName:c.user.name)
+    }
+    private var associatedRackets: [RacketDevice] {
+        _ = associationRevision
+        return associationContext.map { KnownRacketRegistry.devices($0) } ?? []
+    }
+    private var hostAvailable: Bool { session?.online == true }
+    @State private var phoneUnfinished = false
+    @State private var phoneMatch = false
+    @State private var scoringAuthority = "pi"
+    @State private var sharedMatches = false
+    @State private var chooseExistingMatch = false
+    @State private var racketRoster = false
+    @State private var rosterMatchKey = UUID().uuidString
     @Binding var focused: Bool
     var visible = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -23,6 +42,10 @@ struct CourtPage: View {
     @State private var result = false
     @State private var earlyResult = false
     private var session: MatchSession? { store.session }
+    private var racketStartBlocked: Bool {
+        guard rackets.operation(for: "match:" + rosterMatchKey) != nil else { return false }
+        return !rackets.rosterConfirmed || rackets.rosterDraft?.matchKey != rosterMatchKey || rackets.context?.hostID != store.selected?.id
+    }
     private var groupDeviceReady: Bool { social.context == nil || social.context?.deviceID == store.selected?.id && social.context?.matchID == session?.current?.id }
     private var currentSettled: Bool {
         guard let current = session?.current, current.hasID, ["a", "p"].contains(current.state) else { return false }
@@ -45,10 +68,22 @@ struct CourtPage: View {
         #endif
     }
     var body: some View {
+        Group {
+            if phoneMatch { PhoneMatchPage(model:phoneController,inline:true,leave:{ phoneMatch = false }).environmentObject(social) }
+            else { courtBody }
+        }.onChange(of:phoneMatch) { focused = $0 || stage != "home"; if !$0 { loadPhoneAvailability() } }
+        .task(id:social.origin + social.userID + (social.credentials?.token ?? "")) {
+            loadPhoneAvailability()
+            if let context = associationContext { phoneController.open(context,installation:social.installationID); await phoneController.refreshAssociations() }
+            else { phoneController.close() }
+        }
+    }
+    private var courtBody: some View {
         VStack(spacing:0) {
             PageHeader(title:stage == "home" ? "球局" : live ? "本局得分":"准备开赛", back:stage == "home" ? nil : { stage = "home" }, deviceAction:openDevices)
             ScrollView {
                 VStack(spacing:20) {
+
                     courtHeading
                     CourtScene(live:live, compact:stage == "home", doubles:doubles, names:names,
                                scores:previewLive ? previewScores : session?.current?.scores,
@@ -86,7 +121,7 @@ struct CourtPage: View {
         .onChange(of:session?.lastConfirmed) { op in
             if op == "B" || op == "R" { stage = "live" }
             if op == "P" || op == "A" { stage = "home" }
-            if op == "A" { loadRoster() }
+            if op == "A" { loadRoster(); rosterMatchKey = UUID().uuidString }
         }
         .onChange(of:store.accountID) { _ in stage = "home"; loadRoster() }
         .onAppear {
@@ -121,6 +156,41 @@ struct CourtPage: View {
             }.padding(24).background(Palette.background.ignoresSafeArea())
         }
         .sheet(isPresented:$fortune) { FortuneSheet() }
+        .sheet(isPresented: $racketRoster) {
+            if !rackets.capabilities.roster && social.context == nil {
+                VStack(alignment:.leading,spacing:18) {
+                    SheetHeader(title:"球员与拍底")
+                    Text("本场球员").font(.headline)
+                    Text(names[0] + " · 当前账号")
+                    if doubles { Text(names[1]) }
+                    Text(names[2]); if doubles { Text(names[3]) }
+                    ForEach(associatedRackets) { d in
+                        VStack(alignment:.leading,spacing:6) {
+                            Text(d.name).font(.headline)
+                            Label("已关联 · " + (d.user?.name ?? "当前账号"),systemImage:"checkmark.seal")
+                            Text((phoneController.connectedDeviceID == d.id || associationContext.map { KnownRacketRegistry.isConnected(d.id,context:$0) } == true) ? "蓝牙已连接" : "蓝牙连接待确认 · 开赛后验证计分连接").font(.caption).foregroundColor(Palette.muted)
+                        }.padding().frame(maxWidth:.infinity,alignment:.leading).background(Palette.soft).cornerRadius(14)
+                    }
+                    if associatedRackets.isEmpty { Note(text:"当前账号尚未获取已关联拍底。请到设备与连接添加或刷新拍底。") }
+                    Button("设备与连接") { racketRoster = false; openDevices() }
+                    Spacer()
+                }.padding(22).task { await phoneController.refreshAssociations() }
+            } else {
+            RacketRosterPage(matchKey: rosterMatchKey, requiredHostID: store.selected?.id, onConfirmed: { players in
+                let red = players.filter { $0.team == .red }.map { $0.person.name }
+                let blue = players.filter { $0.team == .blue }.map { $0.person.name }
+                doubles = red.count == 2
+                names = [red.first ?? "我方球员", red.count > 1 ? red[1] : "我方队友", blue.first ?? "对方球员", blue.count > 1 ? blue[1] : "对方队友"]
+                selfNameEdited = true; saveRoster()
+            })
+            }
+        }
+        .confirmationDialog("选择继续哪场比赛",isPresented:$chooseExistingMatch,titleVisibility:.visible) {
+            Button("继续这部手机的比赛") { phoneMatch = true }
+            Button("进入树莓派上的比赛") { stage = "live";session?.send("Q") }
+            Button("取消",role:.cancel) {}
+        } message: { Text("两场比赛分别保存。不会自动切换拍底计分主机。") }
+        .sheet(isPresented:$sharedMatches) { SharedMatchesPage().environmentObject(social) }
         .sheet(isPresented:$result) { ResultSheet(names: names, doubles: doubles, early: earlyResult).environmentObject(store).environmentObject(social) }
         .confirmationDialog("这场球先打到这里？",isPresented:$exitMenu,titleVisibility:.visible) {
             Button("暂存球局，下次继续") { session?.send("P") }.disabled(session?.can("P") != true || !groupDeviceReady)
@@ -153,9 +223,15 @@ struct CourtPage: View {
     private var homeContent: some View {
         VStack(spacing:22) {
             VStack(spacing:9) { Text(homeState == .ended ? "本场已结束，精彩已留下" : homeState == .resume ? "还有一场，等你继续":"上场吧，今天也打个好球").font(.system(size:24,weight:.bold)).multilineTextAlignment(.center); Text(homeState == .ended ? "查看结算，清空设备比分后可开始下一场。" : homeState == .resume ? "比分还在，让这一场接着精彩。":"带上球拍，把这一场交给羽小裁。").font(.system(size:14)).foregroundColor(Palette.muted) }
-            Button(homeState.buttonTitle) { let entry = homeState; stage = entry == .ready ? "prepare":"live"; if entry != .ready { session?.send("Q") } }.buttonStyle(PrimaryStyle()).accessibilityIdentifier("prepare-match")
+            Button(phoneUnfinished && !hasMatch ? "回到当前球局" : homeState.buttonTitle) {
+                if phoneUnfinished && hasMatch { chooseExistingMatch = true; return }
+                if phoneUnfinished { phoneMatch = true; return }
+                let entry = homeState; stage = entry == .ready ? "prepare":"live"
+                if entry != .ready { session?.send("Q") }
+            }.buttonStyle(PrimaryStyle()).accessibilityIdentifier("prepare-match")
             Button("找回未完成的球局  →",action:openRecords).font(.system(size:14,weight:.medium)).frame(minHeight:44)
             MenuRow(icon:"person.2",title:"约朋友打球",subtitle:"发起组局，邀请熟人，现场一起计分",action:openGatherings).accessibilityIdentifier("gathering-entry")
+            MenuRow(icon:"antenna.radiowaves.left.and.right",title:"同步比赛",subtitle:"进入主机现场比赛或获授权的手机比赛") { sharedMatches = true }
             MenuRow(icon:"sensor.tag.radiowaves.forward",title:"我的装备",subtitle:store.selected?.name ?? "连接你的羽小裁，开启实时计分",action:openDevices)
         }
     }
@@ -189,9 +265,36 @@ struct CourtPage: View {
                 Button("预览开赛动画") { stage = "live" }.accessibilityIdentifier("preview-start")
                 #endif
                 Note(text:"点击球员修改名字 · 比赛规则与设备一致")
+                MenuRow(icon: "person.2", title: "球员与拍底", subtitle: associatedRackets.isEmpty ? "球员身份与已关联拍底" : "已关联拍底 · " + associatedRackets.map(\.name).joined(separator:"、")) { racketRoster = true }
                 MenuRow(icon:"sensor.tag.radiowaves.forward",title:store.connection,subtitle:store.selected?.name,action:openDevices)
                 Button { fortune = true } label: { HStack { Text("今日羽签").fontWeight(.semibold); Spacer(); Text("开场小提醒  ›") }.font(.system(size:14)).padding(17).background(Palette.soft).cornerRadius(14) }
-                Button(session?.pending != nil ? "等待设备确认…":"开始比赛") { saveRoster(); session?.send("B") }.buttonStyle(PrimaryStyle()).disabled(session?.can("B") != true || social.context != nil)
+                #if DEBUG
+                if social.context == nil {
+                    Picker("本场计分主机",selection:$scoringAuthority) {
+                        Text("树莓派计分").tag("pi")
+                        Text("手机计分").tag("phone")
+                    }.pickerStyle(.segmented)
+                    Button("进入主机已创建的比赛 / 观赛") { sharedMatches = true }
+                    if !hostAvailable { Note(text:"树莓派当前不可用，可检查连接，或选择手机计分。") }
+                    if scoringAuthority == "phone" {
+                    Note(text:"比分由这部手机保存；拍底需已关联到本场球员并完成计分连接。")
+                    Button("使用手机与拍底开始比赛") {
+                        guard let context = associationContext else { openDevices(); return }
+                        phoneController.open(context,installation:social.installationID)
+                        phoneController.start(name:names[2],side:.red,doubles:doubles,partner:names[1],opponentPartner:names[3])
+                        if phoneController.match?.phase != .ended && phoneController.match != nil {
+                            phoneMatch = true
+                            Task { await phoneController.usePreparedConnection() }
+                        }
+                    }.buttonStyle(PrimaryStyle()).disabled(associationContext == nil || hasMatch)
+                    Note(text:phoneController.message)
+                    }
+                }
+                #endif
+                if scoringAuthority == "pi" || social.context != nil {
+                Button(session?.pending != nil ? "等待设备确认…":"开始比赛") { saveRoster(); session?.send("B") }.buttonStyle(PrimaryStyle()).disabled(session?.can("B") != true || social.context != nil || racketStartBlocked)
+                }
+                if racketStartBlocked { Note(text: "本场拍底名单尚未获得当前主机确认，请到球员与拍底查询或刷新。") }
                 if store.selected == nil { Button("连接设备后开始",action:openDevices).frame(minHeight:44) }
                 if session?.hasOldScore == true || hasMatch {
                     Note(text:"设备上已有比分或暂存球局，可以继续比赛，或确认放弃后重新开始。")
@@ -201,6 +304,16 @@ struct CourtPage: View {
             }
             if let session = session, !session.fresh { Button("重新同步比分") { session.send("Q") }.frame(minHeight:44).disabled(!session.can("Q")) }
         }
+    }
+    private func loadPhoneAvailability() {
+        guard social.verifiedBusiness, !social.userID.isEmpty else { phoneUnfinished = false; return }
+        do {
+            let directory = try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+            let scope = PhoneMatchScope(origin:social.origin,account:social.userID,installation:social.installationID)
+            let database = try PhoneMatchStore(url:directory.appendingPathComponent("phone-matches.sqlite"),scope:scope.key)
+            phoneUnfinished = try database.read().matches.last.map { $0.phase != .ended } ?? false
+
+        } catch { phoneUnfinished = true }
     }
     private func loadGroupRoster() {
         guard let c = social.context else { return }

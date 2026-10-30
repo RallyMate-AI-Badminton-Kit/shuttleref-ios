@@ -1,93 +1,213 @@
 import SwiftUI
+#if DEBUG && !UI_PREVIEW
+import ThingSmartBaseKit
+#endif
 
-// First integration stage: both existing identities remain explicit until server verification is available.
 struct AccountCenter: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var social: GatheringStore
-    @State private var businessAccount = false
+    @State private var settings = false
     @State private var confirmLogout = false
-    @StateObject private var oauth = NativeOAuth()
-    @State private var confirmLink = false
-    @State private var oauthEndpoint = ""
-    @AppStorage("ios.auth.reference-fingerprint") private var reference = ""
-    private var actionState: AccountActionState {
-        AccountActionState(loggedIn: store.loggedIn, deviceBusy: store.busy,
-            businessBusy: social.busy, authorizing: oauth.busy || social.oauthBusy,
-            deviceMatchActive: ["a", "p"].contains(store.session?.current?.state ?? ""),
-            deviceCommandPending: store.session?.pending != nil, businessContext: social.context != nil,
-            pendingEvents: !social.journal.events.isEmpty, pendingRecords: !social.recordsJournal.pending.isEmpty)
+    #if DEBUG
+    @StateObject private var sessionProbe = SessionCapabilityProbe()
+    #endif
+    private var blocked: String? {
+        AccountActionState(loggedIn:store.loggedIn, deviceBusy:store.busy, businessBusy:social.busy,
+            authorizing:social.oauthBusy, deviceMatchActive:["a","p"].contains(store.session?.current?.state ?? ""),
+            deviceCommandPending:store.session?.pending != nil, businessContext:social.context != nil,
+            pendingEvents:!social.journal.events.isEmpty,pendingRecords:!social.recordsJournal.pending.isEmpty).deviceChangeBlockReason
     }
-    private var changingBlocked: Bool { actionState.deviceChangeBlockReason != nil }
-    private var authorizationBlocked: Bool { actionState.businessAuthorizationBlockReason != nil }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                SheetHeader(title: "账号与安全")
-                if store.loggedIn {
-                    Label("设备账号已登录", systemImage: "checkmark.shield.fill").font(.headline).foregroundColor(Palette.green)
-                    Text(store.nickname.isEmpty ? "羽小裁球友" : store.nickname).font(.title2.bold())
-                    Text(store.maskedAccount).foregroundColor(Palette.muted)
-                    Button("退出设备账号 / 更换登录") { confirmLogout = true }.disabled(changingBlocked)
-                    if let reason = actionState.deviceChangeBlockReason { Note(text: reason) }
-                } else { AuthForm() }
-                if store.busy { ProgressView() }
-                Note(text: store.status)
-                Divider()
-                MenuRow(icon: "person.crop.circle", title: "战绩与组局账号", subtitle: social.credentials.map { $0.user.name + " · 管理 / 切换" } ?? "登录或恢复已有成绩账号") { businessAccount = true }
-                    .accessibilityIdentifier("account-business-entry")
-                if store.loggedIn {
-                    Text("战绩与组局登录").font(.headline)
-                    if social.credentials?.auth_provider == "tuya" {
-                        Label("已通过涂鸦授权登录", systemImage: "checkmark.shield")
-                        Note(text: "成绩和组局已关联涂鸦身份。退出后可重新授权登录，不再使用旧恢复码。")
-                        Button("重新授权登录") { Task { await oauth.signIn(app: store, social: social, link: false) } }.disabled(authorizationBlocked)
-                    } else {
-                        Button(social.credentials == nil ? "使用涂鸦账号登录战绩与组局" : "关联当前战绩与组局账号") {
-                            if social.credentials == nil { Task { await oauth.signIn(app: store, social: social, link: false) } }
-                            else { confirmLink = true }
-                        }.buttonStyle(PrimaryStyle()).disabled(authorizationBlocked)
-                    }
-                    if let reason = actionState.businessAuthorizationBlockReason, !oauth.busy { Note(text: reason) }
-                    if oauth.busy { ProgressView(); Button("取消授权") { oauth.cancel() } }
-                    if !oauth.message.isEmpty { Note(text: oauth.message) }
-                    #if DEBUG
-                    DisclosureGroup("授权服务（开发）") {
-                        TextField("HTTPS 授权服务地址", text: $oauthEndpoint).keyboardType(.URL).autocapitalization(.none).disableAutocorrection(true).inputStyle()
-                        Button("保存授权地址") { UserDefaults.standard.set(oauthEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")), forKey: "ios.oauth.origin") }.disabled(oauth.busy)
-                    }
-                    #endif
-                }
-                #if DEBUG
-                DisclosureGroup("登录验证（开发）") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("SDK 登录：" + (store.loggedIn ? "成功" : "未登录"))
-                        Text("会话凭据 SID：" + (store.sessionPresent ? "存在（不显示原文）" : "未取得"))
-                        Text("账号区域：" + (store.accountRegion.isEmpty ? "未知" : store.accountRegion))
-                        Text("身份指纹：" + (store.identityFingerprint.isEmpty ? "未取得" : store.identityFingerprint)).font(.caption.monospaced())
-                        if !reference.isEmpty && !store.identityFingerprint.isEmpty {
-                            Text(reference == store.identityFingerprint ? "与上次记录为同一身份" : "与上次记录为不同身份")
-                        }
-                        Button("记录当前身份用于对比") { reference = store.identityFingerprint }.disabled(store.identityFingerprint.isEmpty)
-                        Button("刷新 SDK 状态") { store.refreshAccountEvidence() }
-                        Note(text: "服务端通过 OAuth 独立验证身份；不会上传 SDK 的 SID。请使用上方入口授权登录或关联战绩账号。")
-                    }.padding(.top, 12)
-                }
-                #endif
-            }.padding(22)
-        }.background(Palette.background.ignoresSafeArea())
-            .onAppear { store.refreshAccountEvidence(); oauthEndpoint = oauth.origin }
-            .sheet(isPresented: $businessAccount) { GatheringAccount().environmentObject(social) }
-            .confirmationDialog("退出设备账号？", isPresented: $confirmLogout, titleVisibility: .visible) {
-                Button("退出设备账号", role: .destructive) {
-                    if !changingBlocked {
-                        if social.credentials?.auth_provider == "tuya" { social.run { try await social.logout(); store.logout() } }
-                        else { store.logout() }
-                    }
-                }
-            } message: { Text("将停止设备连接，并退出已通过涂鸦授权的战绩账号；设备绑定、服务器战绩和本机记录保留。尚未关联的旧战绩账号仍单独管理。") }
-            .alert("关联当前战绩账号？", isPresented: $confirmLink) {
-                Button("取消", role: .cancel) {}
-                Button("保留数据并关联") { Task { await oauth.signIn(app: store, social: social, link: true) } }
-            } message: { Text("将保留「\(social.credentials?.user.name ?? "")」的成绩和组局。关联后旧恢复码失效，今后用当前涂鸦账号授权登录；不会自动合并其他账号。") }
+        ScrollView { VStack(alignment:.leading, spacing:22) {
+            SheetHeader(title:"账号与安全")
+            if !store.loggedIn {
+                AuthForm()
+                Note(text:"登录后自动同步战绩、组局和设备。")
+            } else if store.loggedIn && social.needsLogin {
+                Text("正在连接羽小裁账号").font(.headline)
+                Button("重新连接") { Task { await social.loginWithTuyaTicket(app: store) } }.disabled(social.ticketLoginBusy || social.deviceLoginBusy)
+            } else if !social.needsLogin, let account = social.credentials {
+                Label(social.verifiedBusiness ? "已登录羽小裁" : "旧账号待升级", systemImage:"person.crop.circle.badge.checkmark").font(.headline)
+                Text(account.user.name).font(.title2.bold())
+                if let login = account.user.login_name { Text("账号：" + login).foregroundColor(Palette.muted) }
+            }
+            if social.credentials != nil || store.loggedIn {
+                Button("退出登录 / 切换账号",role:.destructive) { confirmLogout = true }.disabled(blocked != nil)
+            }
+            if let blocked { Note(text:blocked) }
+            Note(text:social.message)
+            if social.verifiedBusiness && social.credentials?.auth_provider != "tuya" && store.loggedIn && !social.hasDevicePair(app: store) {
+                Button(social.deviceLoginBusy ? "正在登记…" : "启用本机快速登录") {
+                    social.run { try await social.registerDevicePair(app: store) }
+                }.disabled(social.busy || social.deviceLoginBusy || blocked != nil)
+                Note(text:"临时方案：登记后本机涂鸦登录可自动恢复当前业务账号。涂鸦身份的服务端校验尚未接入。")
+            }
+            Divider()
+            MenuRow(icon:"gearshape", title:"服务器与旧账号恢复", subtitle:"服务器地址、旧恢复凭据") { settings = true }
+            #if DEBUG
+            DisclosureGroup("登录验证（开发）") {
+                Text("SDK 登录：" + (store.loggedIn ? "成功" : "未登录"))
+                Text("账号区域：" + store.accountRegion)
+                Text("身份指纹：" + store.identityFingerprint).font(.caption.monospaced())
+                Button("刷新 SDK 状态") { store.refreshAccountEvidence() }
+                Button(sessionProbe.running ? "检测中…" : "检测当前会话免登能力") { sessionProbe.run() }.disabled(!store.loggedIn || sessionProbe.running)
+                Text(sessionProbe.report).font(.caption).textSelection(.enabled)
+                Button("复制脱敏检测结果") { UIPasteboard.general.string = sessionProbe.report }
+            }
+            #endif
+        }.padding(22) }.background(Palette.background.ignoresSafeArea())
+        .interactiveDismissDisabled(social.busy || store.busy)
+        .sheet(isPresented:$settings) { GatheringAccount().environmentObject(social).environmentObject(store) }
+        .confirmationDialog("退出羽小裁并停止当前设备连接？",isPresented:$confirmLogout,titleVisibility:.visible) {
+            Button("退出登录",role:.destructive) { guard blocked == nil else { return }; social.run { if social.credentials != nil { try await social.logout() }; store.logout() } }
+        } message: { Text("已保存的数据和设备绑定保留。再次使用时登录原账号即可。尚未设置密码的旧账号建议先完成设密。") }
     }
 }
+
+struct NativePasswordForm: View {
+    @EnvironmentObject var store: AppStore
+    @EnvironmentObject var social: GatheringStore
+    var upgrading = false
+    var changing = false
+    @State private var mode = "login"
+    @State private var username = ""
+    @State private var nickname = ""
+    @State private var password = ""
+    @State private var repeatPassword = ""
+    @State private var oldPassword = ""
+    @State private var recovery = ""
+    @State private var error = ""
+    private var action: String { upgrading ? "set-password" : changing ? "change-password" : mode }
+    private var blocked: Bool {
+        let restoringIdentity = social.credentials != nil && ["login","set-password","change-password"].contains(action)
+        let pending = social.context != nil || !social.journal.events.isEmpty || !social.recordsJournal.pending.isEmpty || store.session?.pending != nil || ["a","p"].contains(store.session?.current?.state ?? "")
+        return store.busy || social.busy || social.oauthBusy || (!restoringIdentity && pending)
+    }
+    var body: some View {
+        VStack(alignment:.leading,spacing:14) {
+            if !upgrading && !changing {
+                Picker("登录方式",selection:$mode) { Text("登录").tag("login"); Text("注册").tag("register"); Text("账号恢复").tag("recover-password") }.pickerStyle(.segmented)
+            }
+            if !changing { TextField("登录账号（字母、数字、_ 或 -）",text:$username).textContentType(.username).autocapitalization(.none).disableAutocorrection(true).inputStyle() }
+            if action == "register" { TextField("球友昵称",text:$nickname).inputStyle() }
+            if changing { SecureField("当前密码",text:$oldPassword).textContentType(.password).inputStyle() }
+            if action == "recover-password" {
+                Note(text:"请向测试管理员申请一次性恢复码，有效期 15 分钟。不会按昵称或邮箱自动合并账号。")
+                SecureField("一次性恢复码",text:$recovery).inputStyle()
+            }
+            SecureField(action == "login" ? "密码" : "新密码（12–128 个字符）",text:$password).textContentType(action == "login" ? .password : .newPassword).inputStyle()
+            if action != "login" { SecureField("再次输入新密码",text:$repeatPassword).textContentType(.newPassword).inputStyle() }
+            Button(upgrading ? "设置密码并保留当前数据" : changing ? "修改密码" : mode == "register" ? "注册羽小裁账号" : mode == "recover-password" ? "恢复账号并设置密码" : "登录羽小裁") {
+                guard !blocked else { return }
+                guard action == "login" || password == repeatPassword else { error = "两次密码不一致"; return }
+                error = ""
+                let selectedAction=action, enteredPassword=password, enteredOld=oldPassword, enteredCode=recovery
+                let oldUser=social.userID
+                social.run {
+                    defer { password=""; repeatPassword=""; oldPassword=""; recovery="" }
+                    try await social.passwordAction(selectedAction,username:username,password:enteredPassword,name:nickname,oldPassword:enteredOld,recovery:enteredCode)
+                    if oldUser != social.userID { store.logout() }
+                }
+            }.buttonStyle(PrimaryStyle()).disabled(blocked || password.isEmpty)
+            if social.busy { ProgressView() }
+            Note(text:error)
+        }.onAppear { username=social.credentials?.user.login_name ?? "" }
+        .onChange(of:mode) { _ in password="";repeatPassword="";oldPassword="";recovery="";error="" }
+    }
+}
+
+#if DEBUG
+/// Throwaway capability spike. Never exports credentials or treats SDK callbacks as business identity proof.
+@MainActor private final class SessionCapabilityProbe: ObservableObject {
+    @Published private(set) var running = false
+    @Published private(set) var report = ""
+    private var generation = UUID()
+    private var pending: Set<String> = []
+    #if !UI_PREVIEW
+    private var request: ThingSmartRequest?
+    private var ticketRequest: ThingSmartRequest?
+    #endif
+
+    func run() {
+        guard !running else { return }
+        #if UI_PREVIEW
+        report = "界面预览不调用 SDK；请在已登录的真机检测。"
+        #else
+        let user = ThingSmartUser.sharedInstance()
+        guard user.isLogin else { report = "请先登录设备账号。"; return }
+        let uid = user.uid
+        let id = UUID(); generation = id
+        running = true; pending = ["网关凭证", "社区 SSO", "登录态 ticket"]
+        report = "会话能力实验 v2\n社区代码：shuttleref（未配置）\n"
+        user.requestHighwayToken(success: { [weak self] value in
+            // Only examine structure in memory; do not print or persist token values.
+            let dictionary = value as? [String: Any]
+            let tokenPresent = ["accessToken", "access_token", "token"].contains {
+                !(dictionary?[$0] as? String ?? "").isEmpty
+            } || !(value as? String ?? "").isEmpty
+            let summary = tokenPresent ? "成功回调，存在凭证字段；尚未验证服务端用途" : "成功回调，未识别凭证字段；不能认定可用"
+            Task { @MainActor in self?.complete("网关凭证", summary, id: id, uid: uid) }
+        }, failure: { [weak self] error in
+            let summary = Self.errorSummary(error)
+            Task { @MainActor in self?.complete("网关凭证", summary, id: id, uid: uid) }
+        })
+        let api = ThingSmartRequest(); request = api
+        api.request(withApiName: "m.life.user.community.url.get", postData: ["communityCode": "shuttleref"], version: "1.0", success: { [weak self] value in
+            let root = value as? [String: Any]
+            let payload = root?["resultDO"] as? [String: Any] ?? root
+            let hasURL = !(payload?["communityUrl"] as? String ?? "").isEmpty
+            let summary = hasURL ? "返回社区链接（未打开、未保存）；仍需服务端验签验证" : "成功回调但没有社区链接；不能认定 SSO 可用"
+            Task { @MainActor in self?.complete("社区 SSO", summary, id: id, uid: uid) }
+        }, failure: { [weak self] error in
+            let summary = Self.errorSummary(error)
+            Task { @MainActor in self?.complete("社区 SSO", summary, id: id, uid: uid) }
+        })
+        let ticketAPI = ThingSmartRequest(); ticketRequest = ticketAPI
+        ticketAPI.request(withApiName: "tuya.m.user.sso.ticket.getbysid", postData: [:], version: "1.0", success: { [weak self] value in
+            let root = value as? [String: Any]
+            let payload = root?["result"] as? [String: Any] ?? root?["resultDO"] as? [String: Any] ?? root
+            let present = !(payload?["ticket"] as? String ?? "").isEmpty
+            let summary = present ? "获取成功（未保存或展示）；尚未进行服务端兑换" : "成功回调但未识别 ticket 字段"
+            Task { @MainActor in self?.complete("登录态 ticket", summary, id: id, uid: uid) }
+        }, failure: { [weak self] error in
+            let summary = Self.errorSummary(error)
+            Task { @MainActor in self?.complete("登录态 ticket", summary, id: id, uid: uid) }
+        })
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            guard let self, self.generation == id, self.running else { return }
+            self.request?.cancel()
+            self.ticketRequest?.cancel()
+            for stage in self.pending.sorted() { self.complete(stage, "25 秒内未返回，结果不确定", id: id, uid: uid) }
+        }
+        #endif
+    }
+
+    private func complete(_ stage: String, _ summary: String, id: UUID, uid: String) {
+        guard generation == id, pending.remove(stage) != nil else { return }
+        #if !UI_PREVIEW
+        guard ThingSmartUser.sharedInstance().isLogin, ThingSmartUser.sharedInstance().uid == uid else {
+            generation = UUID(); pending = []; running = false; request?.cancel(); request = nil; ticketRequest?.cancel(); ticketRequest = nil
+            report = "检测期间账号已变更，已丢弃结果。"; return
+        }
+        #endif
+        report += "\(stage)：\(summary)\n"
+        if pending.isEmpty {
+            running = false
+            #if !UI_PREVIEW
+            request = nil
+            ticketRequest = nil
+            #endif
+            report += "结论：本次仅探测客户端能力，尚未证明业务服务端可可信验证身份。"
+        }
+    }
+
+    nonisolated private static func errorSummary(_ error: Error?) -> String {
+        guard let error = error as NSError? else { return "失败，SDK 未返回错误对象" }
+        // SDK documents FailureReason as its symbolic error code. Never copy descriptions/userInfo wholesale.
+        let raw = error.userInfo[NSLocalizedFailureReasonErrorKey] as? String ?? ""
+        let symbolic = raw.range(of: "^[A-Z][A-Z0-9_]{1,63}$", options: .regularExpression) != nil ? raw : "未提供标准错误码"
+        return "失败，code=\(error.code)，\(symbolic)"
+    }
+}
+#endif

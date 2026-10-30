@@ -11,7 +11,7 @@ struct ProfilePage:View {
     @State private var equipment = ""
     @State private var years = "刚刚开始"
     @AppStorage("ios.card.theme") private var theme = 0
-    private var key:String { "ios.profile.\(store.accountID)" }
+    private var key:String { "ios.profile.business." + GatheringPersistence.partition(social.origin, social.userID) }
     var body:some View {
         VStack(spacing:0) {
             PageHeader(title:"我的")
@@ -19,7 +19,7 @@ struct ProfilePage:View {
                 VStack(spacing:20) {
                     PlayerCard(name:nickname,years:years,equipment:equipment,theme:theme)
                     HStack(spacing:12) { Button("编辑资料") { sheet = "编辑资料" };Spacer();Button("装扮名片 ↗") { sheet = "装扮名片" } }.font(.system(size:14,weight:.semibold)).padding(.horizontal,8).frame(minHeight:44)
-                    if !store.loggedIn { Button("登录 / 注册") { socialAccount = true }.buttonStyle(PrimaryStyle()) }
+                    if !social.verifiedBusiness { Button("登录羽小裁") { socialAccount = true }.buttonStyle(PrimaryStyle()) }
                     VStack(spacing:10) {
                         MenuRow(icon:"person.2.fill",title:"我的组局",subtitle:"查看活动、报名与候补",action:openGatherings)
                             .accessibilityIdentifier("profile-gatherings")
@@ -34,7 +34,7 @@ struct ProfilePage:View {
                     Note(text:"羽小裁 · iPhone 原生版\n陪你打好每一场球").multilineTextAlignment(.center).padding(.top,12)
                 }.padding(22)
             }
-        }.onAppear { load() }.onChange(of:store.accountID) { _ in load() }
+        }.onAppear { load() }.onChange(of:social.userID) { _ in load() }.onChange(of:social.origin) { _ in load() }
         .sheet(isPresented: $socialAccount) { AccountCenter().environmentObject(store).environmentObject(social) }
         .sheet(isPresented:Binding(get:{sheet != nil},set:{if !$0 { sheet = nil }})) {
             ScrollView {
@@ -57,7 +57,7 @@ struct ProfilePage:View {
             }.background(Palette.background.ignoresSafeArea())
         }
     }
-    private func load() { let p = UserDefaults.standard.dictionary(forKey:key) as? [String:String] ?? [:];nickname = p["name"] ?? "羽球新朋友";years = p["years"] ?? "刚刚开始";equipment = p["equipment"] ?? "" }
+    private func load() { let p = UserDefaults.standard.dictionary(forKey:key) as? [String:String] ?? [:];nickname = p["name"] ?? (social.credentials?.user.name ?? "羽球新朋友");years = p["years"] ?? "刚刚开始";equipment = p["equipment"] ?? "" }
     private func save() { UserDefaults.standard.set(["name":nickname.trimmingCharacters(in:.whitespacesAndNewlines),"years":years,"equipment":equipment],forKey:key) }
 }
 struct PlayerCard:View {

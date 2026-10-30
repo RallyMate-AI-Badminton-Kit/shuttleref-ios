@@ -5,18 +5,22 @@ struct DevicePage: View {
     @State private var name = "羽小裁之家"
     @State private var pairing = false
     @State private var accountCenter = false
+    @State private var familyMembers = false
+    @State private var racketPage = false
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment:.leading,spacing:20) {
                     SheetHeader(title:"设备与连接")
-                    if !store.loggedIn { AuthForm() }
+                    MenuRow(icon: "figure.badminton", title: "球拍与拍底", subtitle: "添加拍底、关联使用者、查看计分主机") { racketPage = true }
+                    if !store.loggedIn { Button("登录羽小裁") { accountCenter = true }.buttonStyle(PrimaryStyle()) }
                     else {
-                        HStack { Image(systemName:"checkmark.shield").foregroundColor(Palette.green);Text("已登录涂鸦账号").font(.headline);Spacer();Button("账号与安全") { accountCenter = true } }
+                        HStack { Image(systemName:"checkmark.shield").foregroundColor(Palette.green);Text("已登录羽小裁").font(.headline);Spacer();Button("账号与安全") { accountCenter = true } }
                         if !store.homes.isEmpty {
                             Text("选择家庭").font(.headline)
                             ForEach(store.homes) { home in Button { store.loadDevices(home.id) } label: { HStack { Image(systemName:"house");Text(home.name);Spacer();if store.homeID == home.id { Image(systemName:"checkmark.circle.fill") } }.padding(16).background(store.homeID == home.id ? Palette.soft:Color.white).cornerRadius(14) }.disabled(store.busy || store.session?.pending != nil) }
                         }
+                        MenuRow(icon: "person.2.fill", title: "家庭成员与邀请", subtitle: "邀请测试伙伴共享设备，或输入邀请码加入家庭") { familyMembers = true }
                         HStack { TextField("新家庭名称",text:$name).inputStyle();Button("创建") { store.createHome(name) }.disabled(store.busy || name.trimmingCharacters(in:.whitespaces).isEmpty) }
                         HStack { Text("我的设备").font(.headline);Spacer();Button("刷新") { store.loadHomes() }.disabled(store.busy || store.session?.pending != nil) }
                         if store.devices.isEmpty { EmptyCard(icon:"sensor.tag.radiowaves.forward",title:"把羽小裁带上场",detail:"选择或创建家庭，然后为设备配网。已绑定到其他账号的设备，需要先确认它的归属。") }
@@ -43,6 +47,8 @@ struct DevicePage: View {
                 .background(NavigationLink(isActive:$pairing,destination:{ PairingScreen(homeID:store.homeID ?? 0).navigationBarHidden(false).navigationTitle("添加设备").navigationBarTitleDisplayMode(.inline).onDisappear { store.loadHomes() } },label:{EmptyView()}))
         }.navigationViewStyle(.stack)
         .sheet(isPresented: $accountCenter) { AccountCenter().environmentObject(store) }
+        .sheet(isPresented: $familyMembers) { HomeMembersPage().environmentObject(store) }
+        .sheet(isPresented: $racketPage) { RacketPage() }
     }
 }
 struct AuthForm: View {
@@ -108,3 +114,73 @@ struct PairingScreen: View {
     var body:some View { EmptyCard(icon:"wifi",title:"配网页面",detail:"请在真机版本使用蓝牙辅助 Wi-Fi 配网。界面预览不会扫描或连接设备。") }
 }
 #endif
+
+
+struct HomeMembersPage: View {
+    @EnvironmentObject var store: AppStore
+    @EnvironmentObject var social: GatheringStore
+    @State private var code = ""
+    @State private var cancelInvitation: HomeInviteRow?
+    @State private var confirmJoin = false
+    private var homeName: String { store.homes.first { $0.id == store.homeID }?.name ?? "尚未选择家庭" }
+    private var joiningBlocked: Bool { !store.canChangeHome || social.context != nil || social.oauthBusy }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SheetHeader(title: "家庭成员与邀请")
+                Text(homeName).font(.title2.bold())
+                Note(text: "家庭成员可使用家庭内共享的设备。这与球局报名不同；加入家庭不会重新配网，也不会自动加入组局。请使用羽小裁 App 中注册的账号。")
+                if store.homeID != nil {
+                    ForEach(store.homeMembers) { member in
+                        HStack {
+                            Label(member.name, systemImage: "person.crop.circle")
+                            Spacer()
+                            Text(member.role == 2 ? "家庭所有者" : member.role == 1 ? "管理员" : "成员").font(.caption).foregroundColor(Palette.muted)
+                        }.padding(12).background(Color.white).cornerRadius(12)
+                    }
+                    Button("刷新成员与邀请") { store.loadHomeMembers() }.disabled(store.busy)
+                    if store.canInviteHomeMembers {
+                        Button("生成普通成员邀请码") { store.createHomeInvitation() }.buttonStyle(PrimaryStyle()).disabled(store.busy)
+                        if !store.createdHomeCode.isEmpty {
+                            Text(store.createdHomeCode).font(.title3.monospaced()).textSelection(.enabled)
+                            Button("复制邀请码") { UIPasteboard.general.string = store.createdHomeCode }
+                            Note(text: "让对方打开「我的设备 → 家庭成员与邀请」，粘贴邀请码并确认加入。")
+                        }
+                        ForEach(store.homeInvites) { invite in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(invite.code).font(.body.monospaced())
+                                    Text(invite.accepted ? "已接受" : "邀请有效期：\(invite.hours) 小时（以涂鸦校验为准）").font(.caption).foregroundColor(Palette.muted)
+                                }
+                                Spacer()
+                                if !invite.accepted { Button("取消邀请", role: .destructive) { cancelInvitation = invite }.disabled(store.busy) }
+                            }
+                        }
+                    } else { Note(text: "只有家庭所有者或管理员可以邀请新成员。") }
+                }
+                Divider()
+                Text("加入其他家庭").font(.headline)
+                TextField("粘贴家庭邀请码", text: $code).autocapitalization(.none).disableAutocorrection(true).inputStyle()
+                    .disabled(store.busy).onChange(of: code) { _ in store.clearHomeInvitationPreview() }
+                Button("查看邀请") { store.previewHomeInvitation(code) }.disabled(store.busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if let home = store.invitedHome {
+                    Text("受邀家庭：" + home.name).font(.headline)
+                    Button("确认加入家庭") { confirmJoin = true }.buttonStyle(PrimaryStyle()).disabled(joiningBlocked)
+                    Button("暂不加入") { store.clearHomeInvitationPreview() }.disabled(store.busy)
+                    if joiningBlocked && !store.busy { Note(text: "请先处理当前比赛、组局或待确认操作，再切换家庭。") }
+                }
+                if store.busy { ProgressView() }
+                Note(text: store.status)
+                Note(text: "加入后会刷新家庭和设备列表。测试同一块设备时，请轮流操作，避免多人同时加分。")
+            }.padding(22)
+        }.background(Palette.background.ignoresSafeArea())
+        .onAppear { store.clearHomeInvitationPreview(); store.loadHomeMembers() }
+        .interactiveDismissDisabled(store.busy)
+        .confirmationDialog("取消这份家庭邀请？", isPresented: Binding(get: { cancelInvitation != nil }, set: { if !$0 { cancelInvitation = nil } }), titleVisibility: .visible) {
+            Button("取消邀请", role: .destructive) { if let invite = cancelInvitation { store.cancelHomeInvitation(invite) }; cancelInvitation = nil }
+        } message: { Text("邀请码将无法继续用于加入家庭；不会移除已加入的成员。") }
+        .confirmationDialog("加入「\(store.invitedHome?.name ?? "")」？", isPresented: $confirmJoin, titleVisibility: .visible) {
+            Button("加入并查看设备") { if !joiningBlocked { store.joinInvitedHome(); code = "" } }
+        } message: { Text("将使用当前登录账号加入此家庭，并切换到该家庭的设备列表。") }
+    }
+}

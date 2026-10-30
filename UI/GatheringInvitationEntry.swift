@@ -29,10 +29,11 @@ struct GatheringInvitationEntry: View {
                     Text(invite.title).font(.headline)
                     Text(invite.location)
                     Text(Date(timeIntervalSince1970: invite.starts_at).formatted())
+                    if let mode = GatheringFormat(rawValue: invite.format ?? "free") { Label(mode.title, systemImage: mode.icon).foregroundColor(Palette.green) }
                     Note(text: "\(invite.organizer) 邀请你 · \(invite.remaining > 0 ? "还剩 \(invite.remaining) 个名额" : "已满员，可加入候补")")
                     if let user = social.credentials?.user { Note(text: "以 " + user.name + " 的身份报名") }
-                    Button(social.credentials == nil ? "登录后加入" : invite.remaining > 0 ? "加入球局" : "加入候补") {
-                        guard social.credentials != nil else { login(); return }
+                    Button(social.needsLogin ? "登录后加入" : invite.remaining > 0 ? "加入球局" : "加入候补") {
+                        guard !social.needsLogin else { login(); return }
                         let code = resolvedCode
                         social.run { try await social.join(code); clear() }
                     }.buttonStyle(PrimaryStyle()).disabled(social.busy)

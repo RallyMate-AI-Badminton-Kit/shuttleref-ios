@@ -2,6 +2,7 @@ import Foundation
 
 /// Device-account changes and business authorization affect different identities.
 struct AccountActionState {
+    var renewingBusinessIdentity = false
     var loggedIn = false
     var deviceBusy = false
     var businessBusy = false
@@ -17,6 +18,7 @@ struct AccountActionState {
         if authorizing { return "正在授权，请完成或取消本次授权。" }
         if deviceBusy { return "设备账号正在处理请求，请稍候。" }
         if businessBusy { return "战绩与组局正在处理请求，请稍候。" }
+        if renewingBusinessIdentity { return nil }
         if businessContext { return "请先处理当前组局球局，再授权登录。" }
         if pendingEvents { return "请先同步待上传的组局操作，再授权登录。" }
         if pendingRecords { return "请先同步待上传的战绩，再授权登录。" }

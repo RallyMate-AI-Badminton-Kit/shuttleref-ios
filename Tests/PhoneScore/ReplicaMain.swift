@@ -6,6 +6,20 @@ import Foundation
    let value:[String:Any] = ["match_id":"11111111-1111-1111-1111-111111111111","authority_type":"phone","authority_id":"installation","origin":"local","rules_version":"badminton-21-cap30-best3-v1","participants":[],"doubles":false,"revision":revision,"snapshot":["red":points,"blue":0,"redGames":0,"blueGames":0,"server":"r","points":["r"]],"lifecycle":"active","received_at":1,"role":"viewer","can_score":false,"archived":false,"sync_state":"cloud_received"]
    return try JSONDecoder().decode(SharedMatch.self,from:JSONSerialization.data(withJSONObject:value))
   }
+  func host(_ lifecycle:String, authority:String="pi") throws -> SharedMatch {
+   var value = try JSONSerialization.jsonObject(with:JSONEncoder().encode(packet("5"))) as! [String:Any]
+   value["authority_type"]=authority;value["tuya_device_id"]="host-one";value["lifecycle"]=lifecycle
+   return try JSONDecoder().decode(SharedMatch.self,from:JSONSerialization.data(withJSONObject:value))
+  }
+  let ended=try host("aborted")
+  check(ended.matchesHost(deviceID:"host-one",matchID:String(repeating:"1",count:32)))
+  check(!ended.matchesHost(deviceID:"host-two",matchID:ended.id))
+  check(!ended.matchesHost(deviceID:"host-one",matchID:String(repeating:"2",count:32)))
+  check(try !host("completed",authority:"phone").matchesHost(deviceID:"host-one",matchID:ended.id))
+  check(ended.isTerminal && ended.lifecycleTitle == "已提前结束")
+  check(try host("completed").isTerminal)
+  check(try !host("paused").isTerminal)
+  check(try host("paused").lifecycleTitle == "比赛暂停")
   var replica=MatchReplica();let epoch=replica.reset(scope:"account-a")
   check(try replica.accept(packet("9007199254740993"),epoch:epoch))
   check(try !replica.accept(packet("9007199254740992"),epoch:epoch))

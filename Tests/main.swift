@@ -76,3 +76,13 @@ check(CourtRoster.defaultName(account:" 球友 ",deviceAccount:"设备昵称") =
 check(CourtRoster.defaultName(account:" ",deviceAccount:"设备昵称") == "设备昵称","Tuya nickname fallback")
 check(CourtRoster.defaultName(account:nil,deviceAccount:"") == "我方球员","missing nickname keeps placeholder")
 print("PASS: home state and default nickname regressions")
+let abandonedID = String(repeating:"e",count:32)
+let offlineSave = MatchSession(accountID:"abandon",deviceID:"board",online:false,cache:nil,defaults:defaults) { _,_ in fatalError("local discard must not send DP") }
+offlineSave.receive(frame(abandonedID,393,"p","4,1,0,0,1"))
+check(offlineSave.saved != nil,"4:1 saved locally")
+offlineSave.discardLocalSave()
+check(offlineSave.saved == nil,"offline discard clears saved match")
+check(offlineSave.current?.id == abandonedID,"discard cannot pretend device cleared")
+let reopened = MatchSession(accountID:"abandon",deviceID:"board",online:false,cache:nil,defaults:defaults) { _,_ in fatalError("no commands") }
+check(reopened.saved == nil,"discard survives restart")
+print("PASS: offline local discard without device mutation")

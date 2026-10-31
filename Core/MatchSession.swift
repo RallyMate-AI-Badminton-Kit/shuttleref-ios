@@ -115,6 +115,11 @@ final class MatchSession: ObservableObject {
         online = value
         if !value { invalidate("设备已离线，重连后请同步比分") }
     }
+    func discardLocalSave() {
+        save(nil)
+        message = "本机暂存已删除；设备比分未修改。"
+        objectWillChange.send()
+    }
     func expire() { invalidate("未收到设备确认，结果未知。请同步后检查，不要重复加分。") }
     func invalidate(_ text: String = "请重新同步设备状态") { timer?.invalidate(); pending = nil; fresh = false; message = text }
     func disconnect() { valid = false; online = false; invalidate("设备已断开") }

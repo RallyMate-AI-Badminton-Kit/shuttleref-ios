@@ -15,10 +15,27 @@ struct CourtPage: View {
         return associationContext.map { KnownRacketRegistry.devices($0) } ?? []
     }
     private var hostAvailable: Bool { session?.online == true }
+    @State private var hostLoadedScope = ""
+    @StateObject private var hostMatches = LocalMatchBrowser()
+    @Environment(\.scenePhase) private var scenePhase
+    private var hostScope: String {
+        [social.origin, social.userID, social.credentials?.token ?? "", store.selected?.id ?? "",
+         visible && scenePhase == .active ? "visible" : "hidden"].joined(separator:"|")
+    }
+    private var syncedHostMatch: SharedMatch? {
+        guard hostLoadedScope == hostScope, social.verifiedBusiness, social.context == nil else { return nil }
+        return hostMatches.matches.first { $0.matchesHost(deviceID:store.selected?.id,matchID:session?.current?.id) }
+    }
+    private var displayedScores: [UInt8]? {
+        guard let m = syncedHostMatch else { return session?.current?.scores }
+        return [UInt8(clamping:m.snapshot.red), UInt8(clamping:m.snapshot.blue),
+                UInt8(clamping:m.snapshot.redGames), UInt8(clamping:m.snapshot.blueGames),m.snapshot.server == .red ? 0:1]
+    }
     @State private var phoneUnfinished = false
     @State private var phoneMatch = false
     @State private var scoringAuthority = "pi"
     @State private var sharedMatches = false
+    @State private var hostRacketConfiguration = false
     @State private var chooseExistingMatch = false
     @State private var racketRoster = false
     @State private var rosterMatchKey = UUID().uuidString
@@ -39,6 +56,7 @@ struct CourtPage: View {
     @State private var fortune = false
     @State private var exitMenu = false
     @State private var discard = false
+    @State private var discardLocal = false
     @State private var result = false
     @State private var earlyResult = false
     private var session: MatchSession? { store.session }
@@ -54,7 +72,7 @@ struct CourtPage: View {
         }
         return session?.completedResults.contains { $0.id == current.id } == true
     }
-    private var homeState: CourtHomeState { CourtHomeState(snapshot: session?.current, saved: session?.saved, settled: currentSettled) }
+    private var homeState: CourtHomeState { if syncedHostMatch?.isTerminal == true { return .ended }; return CourtHomeState(snapshot: session?.current, saved: session?.saved, settled: currentSettled) }
     private var defaultSelfName: String { CourtRoster.defaultName(account: social.credentials?.user.name, deviceAccount: store.nickname) }
 
     private var settledEarly: Bool { social.context != nil ? social.journal.earlyEnded == true : session?.completedResults.first(where: { $0.id == session?.current?.id })?.earlyEnded == true }
@@ -86,9 +104,9 @@ struct CourtPage: View {
 
                     courtHeading
                     CourtScene(live:live, compact:stage == "home", doubles:doubles, names:names,
-                               scores:previewLive ? previewScores : session?.current?.scores,
+                               scores:previewLive ? previewScores : displayedScores,
                                scoreContext:scoreContext, scoreEventsEnabled:previewLive || scoreAnimationAllowed,
-                               visible:visible, actionable:stage != "home" && (!live || previewLive || session?.can("r") == true && groupDeviceReady)) { index in
+                               visible:visible, actionable:syncedHostMatch == nil && stage != "home" && (!live || previewLive || session?.can("r") == true && groupDeviceReady)) { index in
                         if live {
                             #if UI_PREVIEW
                             previewScores[index >= 2 ? 1:0] += 1
@@ -110,6 +128,18 @@ struct CourtPage: View {
                     else { matchContent }
                 }.padding(.horizontal,22).padding(.top,12).padding(.bottom,28)
             }.accessibilityIdentifier("court-scroll")
+        }
+        .task(id:hostScope) {
+            hostLoadedScope = ""
+            hostMatches.close()
+            guard visible, scenePhase == .active, let context = associationContext, store.selected != nil else { return }
+            hostLoadedScope = hostScope
+            await hostMatches.open(context)
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds:3_000_000_000) } catch { return }
+                guard !Task.isCancelled else { return }
+                await hostMatches.refresh()
+            }
         }
         .animation(reduceMotion ? nil : .timingCurve(0.22,0.8,0.24,1,duration:0.95),value:stage)
         .animation(reduceMotion ? nil : .timingCurve(0.22,0.8,0.24,1,duration:0.95),value:doubles)
@@ -190,6 +220,7 @@ struct CourtPage: View {
             Button("进入树莓派上的比赛") { stage = "live";session?.send("Q") }
             Button("取消",role:.cancel) {}
         } message: { Text("两场比赛分别保存。不会自动切换拍底计分主机。") }
+        .sheet(isPresented:$hostRacketConfiguration) { RacketModePage(context:associationContext) }
         .sheet(isPresented:$sharedMatches) { SharedMatchesPage().environmentObject(social) }
         .sheet(isPresented:$result) { ResultSheet(names: names, doubles: doubles, early: earlyResult).environmentObject(store).environmentObject(social) }
         .confirmationDialog("这场球先打到这里？",isPresented:$exitMenu,titleVisibility:.visible) {
@@ -197,6 +228,14 @@ struct CourtPage: View {
             Button("提前结束，可选 MVP") { earlyResult = true; result = true }.disabled(session?.fresh != true || !groupDeviceReady)
             Button("继续比赛",role:.cancel) {}
         } message: { Text("暂存后可以继续；提前结束会保留当前比分，可选择本场 MVP。") }
+        .alert("删除这场本机暂存？",isPresented:$discardLocal) {
+            Button("取消",role:.cancel) {}
+            Button("删除本机暂存",role:.destructive) {
+                session?.discardLocalSave()
+                scoringAuthority = "phone"
+                stage = "prepare"
+            }
+        } message: { Text("仅删除本机暂存，不等待设备，不删除历史战绩，也不清空主机上的比赛。可以另开手机比赛。") }
         .alert("放弃并清空球局？",isPresented:$discard) {
             Button("取消",role:.cancel) {}; Button("确认放弃",role:.destructive) { session?.send("A") }
         } message: { Text("设备比分和本机暂存会被清空，无法撤销。") }
@@ -217,17 +256,17 @@ struct CourtPage: View {
         } else if !live {
             Picker("比赛形式",selection:$doubles) { Text("单打").tag(false); Text("双打").tag(true) }.pickerStyle(.segmented).disabled(social.context != nil).onChange(of:doubles) { _ in saveRoster() }
         } else {
-            HStack { Text(doubles ? "双打":"单打"); Spacer(); Text(session?.phase ?? (previewLive ? "界面预览":"等待设备")); Spacer(); Text("局数 \(session?.current?.scores[2] ?? 0) : \(session?.current?.scores[3] ?? 0)") }.font(.system(size:13,weight:.medium)).foregroundColor(Palette.muted)
+            HStack { Text(doubles ? "双打":"单打"); Spacer(); Text(syncedHostMatch?.lifecycleTitle ?? (session?.current?.state == "p" ? "状态待同步" : session?.phase) ?? (previewLive ? "界面预览":"等待设备")); Spacer(); Text("局数 \(displayedScores?[2] ?? 0) : \(displayedScores?[3] ?? 0)") }.font(.system(size:13,weight:.medium)).foregroundColor(Palette.muted)
         }
     }
     private var homeContent: some View {
         VStack(spacing:22) {
-            VStack(spacing:9) { Text(homeState == .ended ? "本场已结束，精彩已留下" : homeState == .resume ? "还有一场，等你继续":"上场吧，今天也打个好球").font(.system(size:24,weight:.bold)).multilineTextAlignment(.center); Text(homeState == .ended ? "查看结算，清空设备比分后可开始下一场。" : homeState == .resume ? "比分还在，让这一场接着精彩。":"带上球拍，把这一场交给羽小裁。").font(.system(size:14)).foregroundColor(Palette.muted) }
+            VStack(spacing:9) { Text(homeState == .ended ? "本场已结束，精彩已留下" : homeState == .resume ? "还有一场，等你继续":"上场吧，今天也打个好球").font(.system(size:24,weight:.bold)).multilineTextAlignment(.center); Text(syncedHostMatch?.isTerminal == true ? "比赛结果已同步，下一场请在树莓派屏幕开赛。" : homeState == .ended ? "查看结算，清空设备比分后可开始下一场。" : homeState == .resume ? "比分还在，让这一场接着精彩。":"带上球拍，把这一场交给羽小裁。").font(.system(size:14)).foregroundColor(Palette.muted) }
             Button(phoneUnfinished && !hasMatch ? "回到当前球局" : homeState.buttonTitle) {
                 if phoneUnfinished && hasMatch { chooseExistingMatch = true; return }
                 if phoneUnfinished { phoneMatch = true; return }
                 let entry = homeState; stage = entry == .ready ? "prepare":"live"
-                if entry != .ready { session?.send("Q") }
+                if entry != .ready && syncedHostMatch == nil { session?.send("Q") }
             }.buttonStyle(PrimaryStyle()).accessibilityIdentifier("prepare-match")
             Button("找回未完成的球局  →",action:openRecords).font(.system(size:14,weight:.medium)).frame(minHeight:44)
             MenuRow(icon:"person.2",title:"约朋友打球",subtitle:"发起组局，邀请熟人，现场一起计分",action:openGatherings).accessibilityIdentifier("gathering-entry")
@@ -237,15 +276,26 @@ struct CourtPage: View {
     }
     private var matchContent: some View {
         VStack(spacing:16) {
-            if live {
+            if let match = syncedHostMatch {
+                Text(match.lifecycleTitle).font(.headline)
+                Text("\(match.snapshot.red) : \(match.snapshot.blue)").font(.title.bold())
+                Note(text:match.isTerminal ? "结果已由树莓派保存并同步。下一场请在树莓派屏幕开赛。" : "由树莓派控制本场比赛，手机只读同步比分。")
+                if match.lifecycle == "aborted" { Note(text:"提前结束保留当前比分，不计正常完赛胜负。") }
+                if !hostMatches.message.isEmpty { Note(text:hostMatches.message) }
+                Button("查看同步比赛") { sharedMatches = true }.buttonStyle(PrimaryStyle())
+            } else if live {
                 #if UI_PREVIEW
                 Button("预览撤销红方一分") { if previewScores[0] > 0 { previewScores[0] -= 1 } }
                 #endif
                 if currentSettled { Text(settledEarly ? "已提前结束 · 不计正常完赛胜负" : "本场已结算").font(.headline) }
                 else if session?.current?.state == "p" || session?.saved != nil && session?.current?.state != "a" {
-                    Text("已暂存 · \(session?.saved?.scores[0] ?? 0) : \(session?.saved?.scores[1] ?? 0)").font(.headline)
+                    Text("状态待同步 · \(session?.saved?.scores[0] ?? 0) : \(session?.saved?.scores[1] ?? 0)").font(.headline)
                     Button("恢复球局") { session?.send("R") }.buttonStyle(PrimaryStyle()).disabled(session?.can("R") != true || !groupDeviceReady || currentSettled)
-                    Note(text:"暂存保存在这台 iPhone，卸载 App 后会丢失。")
+                    Note(text:"已保留本机比分。设备兼容回执不能区分暂停与结束，请核对树莓派屏幕；已结束的比赛需等待主机上传结果，不要恢复旧比分。")
+                    if session?.saved != nil && social.context == nil {
+                        Button("删除本机暂存，不等待设备",role:.destructive) { discardLocal = true }
+                            .frame(minHeight:44)
+                    }
                 }
                 HStack {
                     Button { session?.send("U") } label: { Label("撤销上一分",systemImage:"arrow.uturn.backward") }.disabled(session?.can("U") != true || !groupDeviceReady)
@@ -258,7 +308,12 @@ struct CourtPage: View {
                     Note(text:social.message)
                     Button("查看组局 / 重试上传",action:openGatherings)
                 }
-                if session?.current?.finished == true || social.journal.archived || session?.completedResults.contains(where: { $0.id == session?.current?.id }) == true { Button("清空比分，准备下一场") { discard = true }.frame(minHeight:44).disabled(session?.can("A") != true || (social.context != nil ? !social.journal.archived : session?.completedResults.contains(where: { $0.id == session?.current?.id }) != true)) }
+                if social.context == nil && hasMatch {
+                    Button(currentSettled ? "清空比分，准备下一场" : "放弃本场并清空比分", role:.destructive) { discard = true }
+                        .frame(minHeight:44).disabled(session?.can("A") != true)
+                } else if social.journal.archived {
+                    Button("清空比分，准备下一场") { discard = true }.frame(minHeight:44).disabled(session?.can("A") != true)
+                }
                 Note(text:session?.message ?? "请先连接设备。点击球员加分，以设备确认的比分为准。")
             } else {
                 #if UI_PREVIEW
@@ -286,13 +341,18 @@ struct CourtPage: View {
                             phoneMatch = true
                             Task { await phoneController.usePreparedConnection() }
                         }
-                    }.buttonStyle(PrimaryStyle()).disabled(associationContext == nil || hasMatch)
+                    }.buttonStyle(PrimaryStyle()).disabled(associationContext == nil)
                     Note(text:phoneController.message)
                     }
                 }
                 #endif
-                if scoringAuthority == "pi" || social.context != nil {
-                Button(session?.pending != nil ? "等待设备确认…":"开始比赛") { saveRoster(); session?.send("B") }.buttonStyle(PrimaryStyle()).disabled(session?.can("B") != true || social.context != nil || racketStartBlocked)
+                if scoringAuthority == "pi" && social.context == nil {
+                    Note(text:"请在树莓派屏幕开赛，上传后从这里进入同一场比赛。选择树莓派计分不会自动切换拍底的连接模式。")
+                    Button("进入树莓派比赛") { sharedMatches = true }.buttonStyle(PrimaryStyle())
+                    Button("配置拍底连接树莓派") { hostRacketConfiguration = true }
+                        .frame(minHeight:44).disabled(associationContext == nil)
+                } else if social.context != nil {
+                    Note(text:"请从组局页面确认本场主机与名单。")
                 }
                 if racketStartBlocked { Note(text: "本场拍底名单尚未获得当前主机确认，请到球员与拍底查询或刷新。") }
                 if store.selected == nil { Button("连接设备后开始",action:openDevices).frame(minHeight:44) }
@@ -373,6 +433,18 @@ struct ResultSheet: View {
             showCelebration()
         } catch { self.error = error.localizedDescription }
     }
+    private func resolvePauseWait() {
+        guard waitingForPause else { return }
+        guard session?.current?.id == expectedMatch, store.selected?.id == expectedDevice else {
+            waitingForPause = false
+            error = "设备或球局已改变，请重新打开结算。"
+            return
+        }
+        guard session?.pending == nil else { return }
+        waitingForPause = false
+        if session?.fresh == true && session?.current?.state == "p" { commit() }
+        else { error = "暂停结果未确认，请先同步设备状态再重试。" }
+    }
     private func showCelebration() {
         guard submitted, let snapshot = session?.current else { return }
         let name = players.first { $0.id == selection }?.name
@@ -384,6 +456,7 @@ struct ResultSheet: View {
             SheetHeader(title: early ? "提前结束本场" : "本场结算")
             Text("\(session?.current?.scores[2] ?? 0) : \(session?.current?.scores[3] ?? 0)").font(.system(size: 64, weight: .bold, design: .rounded)).frame(maxWidth: .infinity)
             Text("局数 · 三局两胜").foregroundColor(Palette.muted)
+            Note(text: "本场由计分主机记录，结束前需主机确认暂停；拍底的手机蓝牙模式不会自动迁移这场比赛。")
             if early { Text("当前比分 \(session?.current?.scores[0] ?? 0) : \(session?.current?.scores[1] ?? 0)"); Note(text: "提前结束保留当前比分，不计正常完赛胜负。") }
             Text(early ? "本场 MVP（可选）" : "选择本场 MVP").font(.title2.bold())
             Note(text: "从本场参赛球员中选择一人，确认后与成绩一同保存。")
@@ -402,7 +475,16 @@ struct ResultSheet: View {
                 Button(waitingForPause ? "等待设备暂停确认…" : early ? "确认提前结束" : group ? "确认 MVP 并归档成绩" : "确认 MVP 并保存本局") {
                     error = ""
                     if early && session?.current?.state == "a" {
-                        waitingForPause = true; session?.send("P")
+                        guard let session, session.can("P") else {
+                            error = "计分主机当前无法暂停，请检查主机连接并同步比分。"
+                            return
+                        }
+                        waitingForPause = true
+                        session.send("P")
+                        if session.pending?.op != "P" {
+                            waitingForPause = false
+                            error = session.message
+                        }
                     } else { commit() }
                 }.buttonStyle(PrimaryStyle()).disabled((!early && selection == nil) || waitingForPause || social.busy || session?.fresh != true || session?.pending != nil || (!early && session?.current?.finished != true))
             }
@@ -415,14 +497,20 @@ struct ResultSheet: View {
             Button("返回球局") { dismiss() }.frame(maxWidth: .infinity, minHeight: 44)
         }.padding(24) }.background(Palette.background.ignoresSafeArea())
             .fullScreenCover(item: $celebration) { value in MatchCelebrationView(result: value) }
-            .onChange(of: "\(session?.pending?.token.description ?? "none"):\(session?.fresh == true):\(session?.current?.state ?? "")") { _ in
-                guard waitingForPause, session?.pending == nil else { return }
-                // MatchSession publishes pending before freshness; process after the receive callback.
-                DispatchQueue.main.async {
-                    guard waitingForPause else { return }
+            .onReceive(store.objectWillChange) { _ in
+                // AppStore forwards MatchSession's willChange before its fields change.
+                // Read the settled values on the next main-queue turn.
+                DispatchQueue.main.async { resolvePauseWait() }
+            }
+            .task(id: waitingForPause) {
+                guard waitingForPause else { return }
+                do { try await Task.sleep(nanoseconds:13_000_000_000) } catch { return }
+                guard waitingForPause else { return }
+                if session?.pending?.op == "P" { session?.expire() }
+                resolvePauseWait()
+                if waitingForPause {
                     waitingForPause = false
-                    if session?.fresh == true && session?.current?.state == "p" { commit() }
-                    else { error = "暂停结果未确认，请先同步设备状态再重试。" }
+                    error = "尚未收到计分主机暂停确认，请同步实际比分后重试；成绩尚未结算。"
                 }
             }
             .onChange(of: session?.lastConfirmed) { if $0 == "A" { dismiss() } }

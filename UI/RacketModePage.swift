@@ -66,7 +66,7 @@ import SwiftUI
             if guardState==1 { message += "。请先正常结束或暂停原计分会话并停止拍底连接。" }
             if guardState==2 { message += "。有未确认计分事件，需要原主机核对；不能直接清除或换主机。" }
             enabled=guardState==0 && settings["enabled"] as? Bool == true
-            if settings["enabled"] as? Bool != true { message += "。当前仅查询，实验配网尚未开放。" }
+            if settings["enabled"] as? Bool != true { message += result["mode"] as? String == "pi" ? "。模式切换暂未开放；不影响当前树莓派模式。" : "。已处于手机计分模式，无需重新配网。切换到树莓派暂未开放。" }
         } catch { if scope==context { message=error.localizedDescription } }
     }
     func configure(_ mode:String,profile:String? = nil,context:RacketContext) async {

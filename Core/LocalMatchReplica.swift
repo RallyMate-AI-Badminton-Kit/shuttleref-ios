@@ -10,6 +10,23 @@ struct SharedMatch: Codable, Equatable, Identifiable {
     let lifecycle: String; let received_at: Int64; let role: String; let can_score: Bool
     let archived: Bool; let sync_state: String; let tuya_device_id: String?
     var id: String { match_id }
+    var isTerminal: Bool { ["completed", "aborted"].contains(lifecycle) }
+    var lifecycleTitle: String {
+        switch lifecycle {
+        case "completed": return "比赛已完成"
+        case "aborted": return "已提前结束"
+        case "paused": return "比赛暂停"
+        case "active": return "比赛进行中"
+        default: return "比赛状态待确认"
+        }
+    }
+    func matchesHost(deviceID: String?, matchID: String?) -> Bool {
+        guard authority_type == "pi", let deviceID, !deviceID.isEmpty,
+              tuya_device_id == deviceID, let matchID else { return false }
+        let normalized = matchID.replacingOccurrences(of:"-",with:"").lowercased()
+        return normalized.count == 32 && normalized != String(repeating:"0",count:32)
+            && normalized == id.replacingOccurrences(of:"-",with:"").lowercased()
+    }
     var names: [String] {
         let r=participants.filter { $0.side == "r" }.map(\.name)
         let b=participants.filter { $0.side == "b" }.map(\.name)

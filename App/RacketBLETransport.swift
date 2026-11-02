@@ -13,6 +13,34 @@ import CoreBluetooth
     private var subscription: CheckedContinuation<Void, Error>?
     func exchangeArchive(_ command:Data) async throws -> Data { try await exchangeManagement(command,dual:false) }
     func exchangeMode(_ command:Data) async throws -> Data { try await exchangeManagement(command,dual:true) }
+    func readModeDiagnostics() async throws -> RacketNetworkSnapshot {
+        guard exchangeID==nil,scoreNotification==nil else { throw RacketFailure.pauseRequired }
+        guard let peripheral,peripheral.state == .connected else { throw RacketFailure.interrupted }
+        let id=UUID(),current=run;exchangeID=id
+        defer { if exchangeID==id { exchangeID=nil } }
+        managementService=RacketDualHostWire.service
+        managementRX=RacketDualHostWire.rx
+        managementTX=RacketNetworkSnapshot.characteristic
+        if chars[CBUUID(string:managementTX)] == nil {
+            try await withCheckedThrowingContinuation { (c:CheckedContinuation<Void,Error>) in
+                archiveDiscovery=c;peripheral.discoverServices([CBUUID(string:managementService)])
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds:5_000_000_000)
+                    guard let self,self.run==current,self.exchangeID==id,let waiting=self.archiveDiscovery else { return }
+                    self.archiveDiscovery=nil;waiting.resume(throwing:RacketFailure.protocolUnavailable)
+                }
+            }
+        }
+        var assembler=RacketNetworkAssembler()
+        for _ in 0..<10 {
+            try Task.checkCancellation()
+            guard run==current else { throw RacketFailure.cancelled }
+            let frame=try await read(RacketNetworkSnapshot.characteristic)
+            guard run==current else { throw RacketFailure.cancelled }
+            if let snapshot=try assembler.append(frame) { return snapshot }
+        }
+        throw RacketFailure.verificationFailed
+    }
     private func exchangeManagement(_ command:Data,dual:Bool) async throws -> Data {
         guard exchangeID == nil, scoreNotification == nil, let peripheral, peripheral.state == .connected else { throw RacketFailure.pauseRequired }
         let frames: (Data,UInt8) throws -> [Data] = dual ? RacketDualHostWire.frames : RacketArchiveWire.frames

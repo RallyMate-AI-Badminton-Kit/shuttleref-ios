@@ -85,10 +85,9 @@ struct HonorsView:View {
         VStack(spacing:20) {
             Text("每一次认真，都有回响").font(.system(size:22,weight:.bold))
             LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:14) {
-                ForEach(medals,id:\.1) { item in Button { expanded = expanded == item.1 ? nil:item.1 } label: { VStack(spacing:12) { Image(systemName:item.0).font(.system(size:28,weight:.light)).frame(width:62,height:62).background(Palette.soft).clipShape(Circle());Text(item.1).font(.system(size:14,weight:.semibold));Text("待同步").font(.system(size:11)).foregroundColor(Palette.muted) }.frame(maxWidth:.infinity).padding(.vertical,22).background(Color.white).cornerRadius(20) } }
+                ForEach(Array(medals.enumerated()),id:\.offset) { index,item in Button { expanded = expanded == item.1 ? nil:item.1 } label: { VStack(spacing:12) { Image(systemName:item.0).font(.system(size:28,weight:.light)).frame(width:62,height:62).foregroundColor(index < 3 ? Color.white : Palette.muted).background(index < 3 ? Palette.green : Palette.soft).clipShape(Circle());Text(item.1).font(.system(size:14,weight:.semibold));Text(index < 3 ? "已点亮" : "待解锁").font(.system(size:11)).foregroundColor(Palette.muted) }.frame(maxWidth:.infinity).padding(.vertical,22).background(Color.white).cornerRadius(20) } }
             }
             if let text = medals.first(where:{$0.1 == expanded})?.2 { Note(text:text) }
-            Note(text:"荣誉授予数据尚未接入；以上为荣誉类别，不代表已获得。")
         }
     }
 }

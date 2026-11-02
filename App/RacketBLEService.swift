@@ -79,6 +79,13 @@ private final class RacketNoRedirect: NSObject, URLSessionTaskDelegate {
                 throw RacketDiagnostic(stage:"回执维护",detail:detail)
             }
             if code == "SCORE_BUSY" { throw RacketFailure.pauseRequired }
+            let addressErrors=["HOST_ENDPOINT_OFFLINE":"树莓派地址上报已过期，请等待主机重新上线。",
+                "HOST_ENDPOINT_CHANGED":"树莓派地址已变化，请刷新主机后重新确认。","INVALID_WIFI":"Wi-Fi 名称或密码不符合要求，请检查名称长度和 8–63 字节密码。",
+                "CONFIG_UNCHANGED":"网络和主机配置未变化，无需重复下发。请刷新网络状态。","INVALID_TARGET":"目标地址或端口无效，请填写树莓派 IPv4 地址。",
+                               "TARGET_UNCHANGED":"地址和端口与已确认配置相同，无需重复更新。",
+                               "CONFIRMED_CONFIG_REQUIRED":"缺少当前配置的确认记录，无法保证保留原 Wi-Fi 凭据，请先核对配置。",
+                               "PROFILE_CHANNEL_MISMATCH":"主机通道配置不一致，请核对原主机，不能直接覆盖。"]
+            if let detail=addressErrors[code] { throw RacketDiagnostic(stage:"主机配置",detail:detail) }
             if code.hasPrefix("MODE_") || code == "FRESH_AUTH_REQUIRED" || code == "DUAL_HOST_DISABLED" || code == "PROFILE_UNAVAILABLE" {
                 throw RacketDiagnostic(stage:"主机配置",detail:code == "FRESH_AUTH_REQUIRED" ? "请重新连接并认证拍底。" : code == "DUAL_HOST_DISABLED" ? "实验配网尚未开放。" : "配置条件尚未满足（"+code+"），请查询当前状态。")
             }
@@ -145,6 +152,16 @@ private final class RacketNoRedirect: NSObject, URLSessionTaskDelegate {
         return try await call("/archive/"+id+"/response",context:context,body:["response":response.base64EncodedString()])
     }
     func confirmDevice(_ id: String, context: RacketContext) async throws -> RacketDeviceConfirmation { throw RacketFailure.protocolUnavailable }
+    /// Firmware management authorization expires 60 seconds after BLE connection,
+    /// not 60 seconds after AUTH. Re-reading INFO cannot renew that session.
+    func verifyForMode(_ candidate: RacketNearby, context: RacketContext) async throws -> RacketVerifiedNearby {
+        guard transport.scoreNotification == nil else { throw RacketFailure.pauseRequired }
+        if transport.isConnected {
+            _ = try await transport.reconnect(candidate)
+        }
+        return try await verifyAndPrepare(candidate,hostID:nil,context:context)
+    }
+
     func verifyAndPrepare(_ candidate: RacketNearby, hostID: String?, context: RacketContext) async throws -> RacketVerifiedNearby {
         guard transport.scoreNotification == nil else { throw RacketFailure.pauseRequired }
         activate(context); let run = epoch

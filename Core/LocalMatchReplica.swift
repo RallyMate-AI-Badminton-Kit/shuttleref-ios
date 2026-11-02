@@ -9,6 +9,8 @@ struct SharedMatch: Codable, Equatable, Identifiable {
     let doubles: Bool; let revision: String; let snapshot: PhoneScore
     let lifecycle: String; let received_at: Int64; let role: String; let can_score: Bool
     let archived: Bool; let sync_state: String; let tuya_device_id: String?
+    var can_end: Bool? = nil
+    var canEndFromPhone: Bool { authority_type == "pi" && !isTerminal && can_end == true }
     var id: String { match_id }
     var isTerminal: Bool { ["completed", "aborted"].contains(lifecycle) }
     var lifecycleTitle: String {
@@ -31,6 +33,16 @@ struct SharedMatch: Codable, Equatable, Identifiable {
         let r=participants.filter { $0.side == "r" }.map(\.name)
         let b=participants.filter { $0.side == "b" }.map(\.name)
         return [r.first ?? "名单同步中",r.dropFirst().first ?? "",b.first ?? "名单同步中",b.dropFirst().first ?? ""]
+    }
+}
+enum SharedMatchSelection {
+    static func visible(_ matches:[SharedMatch],piOnly:Bool,deviceID:String?,matchID:String? = nil) -> [SharedMatch] {
+        if let matchID { return matches.filter { $0.matchesHost(deviceID:deviceID,matchID:matchID) } }
+        guard piOnly else { return matches }
+        return matches.filter {
+            $0.authority_type == "pi" && ["active","paused"].contains($0.lifecycle)
+                && (deviceID == nil || deviceID?.isEmpty == true || $0.tuya_device_id == deviceID)
+        }
     }
 }
 struct SharedMatchList: Decodable { let matches: [SharedMatch] }

@@ -26,7 +26,9 @@ struct CourtPage: View {
         guard hostLoadedScope == hostScope, social.verifiedBusiness, social.context == nil else { return nil }
         return hostMatches.matches.first { $0.matchesHost(deviceID:store.selected?.id,matchID:session?.current?.id) }
     }
+    private var preparingAfterHostMatch: Bool { stage == "prepare" && syncedHostMatch?.isTerminal == true }
     private var displayedScores: [UInt8]? {
+        if preparingAfterHostMatch { return nil }
         guard let m = syncedHostMatch else { return session?.current?.scores }
         return [UInt8(clamping:m.snapshot.red), UInt8(clamping:m.snapshot.blue),
                 UInt8(clamping:m.snapshot.redGames), UInt8(clamping:m.snapshot.blueGames),m.snapshot.server == .red ? 0:1]
@@ -35,7 +37,10 @@ struct CourtPage: View {
     @State private var phoneMatch = false
     @State private var scoringAuthority = "pi"
     @State private var sharedMatches = false
+    @State private var sharedMatchesPiOnly = false
     @State private var hostRacketConfiguration = false
+    @State private var piStart = false
+    @State private var piEndMatch:SharedMatch?
     @State private var chooseExistingMatch = false
     @State private var racketRoster = false
     @State private var rosterMatchKey = UUID().uuidString
@@ -106,7 +111,7 @@ struct CourtPage: View {
                     CourtScene(live:live, compact:stage == "home", doubles:doubles, names:names,
                                scores:previewLive ? previewScores : displayedScores,
                                scoreContext:scoreContext, scoreEventsEnabled:previewLive || scoreAnimationAllowed,
-                               visible:visible, actionable:syncedHostMatch == nil && stage != "home" && (!live || previewLive || session?.can("r") == true && groupDeviceReady)) { index in
+                               visible:visible, actionable:(syncedHostMatch == nil || preparingAfterHostMatch) && stage != "home" && (!live || previewLive || session?.can("r") == true && groupDeviceReady)) { index in
                         if live {
                             #if UI_PREVIEW
                             previewScores[index >= 2 ? 1:0] += 1
@@ -221,7 +226,9 @@ struct CourtPage: View {
             Button("取消",role:.cancel) {}
         } message: { Text("两场比赛分别保存。不会自动切换拍底计分主机。") }
         .sheet(isPresented:$hostRacketConfiguration) { RacketModePage(context:associationContext) }
-        .sheet(isPresented:$sharedMatches) { SharedMatchesPage().environmentObject(social) }
+        .sheet(item:$piEndMatch,onDismiss:{ Task { await hostMatches.refresh() } }) { PiEndPage(match:$0).environmentObject(social) }
+        .sheet(isPresented:$piStart) { PiStartPage(deviceID:store.selected?.id ?? "",names:names,doubles:doubles,racketDevices:associatedRackets).environmentObject(social) }
+        .sheet(isPresented:$sharedMatches) { SharedMatchesPage(piOnly:sharedMatchesPiOnly,hostDeviceID:sharedMatchesPiOnly ? store.selected?.id:nil).environmentObject(social) }
         .sheet(isPresented:$result) { ResultSheet(names: names, doubles: doubles, early: earlyResult).environmentObject(store).environmentObject(social) }
         .confirmationDialog("这场球先打到这里？",isPresented:$exitMenu,titleVisibility:.visible) {
             Button("暂存球局，下次继续") { session?.send("P") }.disabled(session?.can("P") != true || !groupDeviceReady)
@@ -261,28 +268,31 @@ struct CourtPage: View {
     }
     private var homeContent: some View {
         VStack(spacing:22) {
-            VStack(spacing:9) { Text(homeState == .ended ? "本场已结束，精彩已留下" : homeState == .resume ? "还有一场，等你继续":"上场吧，今天也打个好球").font(.system(size:24,weight:.bold)).multilineTextAlignment(.center); Text(syncedHostMatch?.isTerminal == true ? "比赛结果已同步，下一场请在树莓派屏幕开赛。" : homeState == .ended ? "查看结算，清空设备比分后可开始下一场。" : homeState == .resume ? "比分还在，让这一场接着精彩。":"带上球拍，把这一场交给羽小裁。").font(.system(size:14)).foregroundColor(Palette.muted) }
-            Button(phoneUnfinished && !hasMatch ? "回到当前球局" : homeState.buttonTitle) {
+            VStack(spacing:9) { Text(homeState == .ended ? "本场已结束，精彩已留下" : homeState == .resume ? "还有一场，等你继续":"上场吧，今天也打个好球").font(.system(size:24,weight:.bold)).multilineTextAlignment(.center); Text(syncedHostMatch?.isTerminal == true ? "比赛结果已同步，可以从手机准备下一场。" : homeState == .ended ? "查看结算，清空设备比分后可开始下一场。" : homeState == .resume ? "比分还在，让这一场接着精彩。":"带上球拍，把这一场交给羽小裁。").font(.system(size:14)).foregroundColor(Palette.muted) }
+            Button(phoneUnfinished && !hasMatch ? "回到当前球局" : syncedHostMatch?.isTerminal == true ? "准备下一场" : homeState.buttonTitle) {
                 if phoneUnfinished && hasMatch { chooseExistingMatch = true; return }
                 if phoneUnfinished { phoneMatch = true; return }
+                if syncedHostMatch?.isTerminal == true { prepareNextHostMatch(); return }
                 let entry = homeState; stage = entry == .ready ? "prepare":"live"
                 if entry != .ready && syncedHostMatch == nil { session?.send("Q") }
             }.buttonStyle(PrimaryStyle()).accessibilityIdentifier("prepare-match")
             Button("找回未完成的球局  →",action:openRecords).font(.system(size:14,weight:.medium)).frame(minHeight:44)
             MenuRow(icon:"person.2",title:"约朋友打球",subtitle:"发起组局，邀请熟人，现场一起计分",action:openGatherings).accessibilityIdentifier("gathering-entry")
-            MenuRow(icon:"antenna.radiowaves.left.and.right",title:"同步比赛",subtitle:"进入主机现场比赛或获授权的手机比赛") { sharedMatches = true }
+            MenuRow(icon:"antenna.radiowaves.left.and.right",title:"同步比赛",subtitle:"进入主机现场比赛或获授权的手机比赛") { sharedMatchesPiOnly = false; sharedMatches = true }
             MenuRow(icon:"sensor.tag.radiowaves.forward",title:"我的装备",subtitle:store.selected?.name ?? "连接你的羽小裁，开启实时计分",action:openDevices)
         }
     }
     private var matchContent: some View {
         VStack(spacing:16) {
-            if let match = syncedHostMatch {
+            if let match = syncedHostMatch, !preparingAfterHostMatch {
                 Text(match.lifecycleTitle).font(.headline)
                 Text("\(match.snapshot.red) : \(match.snapshot.blue)").font(.title.bold())
-                Note(text:match.isTerminal ? "结果已由树莓派保存并同步。下一场请在树莓派屏幕开赛。" : "由树莓派控制本场比赛，手机只读同步比分。")
+                Note(text:match.isTerminal ? "结果已由树莓派保存并同步，可以从手机准备下一场。" : "比分由树莓派确认并同步；主机管理员可以从手机结束本场。")
                 if match.lifecycle == "aborted" { Note(text:"提前结束保留当前比分，不计正常完赛胜负。") }
                 if !hostMatches.message.isEmpty { Note(text:hostMatches.message) }
-                Button("查看同步比赛") { sharedMatches = true }.buttonStyle(PrimaryStyle())
+                if match.isTerminal { Button("准备下一场") { prepareNextHostMatch() }.buttonStyle(PrimaryStyle()).accessibilityIdentifier("prepare-next-pi-match") }
+                if match.canEndFromPhone { Button("结束比赛") { piEndMatch=match }.buttonStyle(PrimaryStyle()) }
+                Button("查看同步比赛") { sharedMatchesPiOnly = false; sharedMatches = true }.buttonStyle(PrimaryStyle())
             } else if live {
                 #if UI_PREVIEW
                 Button("预览撤销红方一分") { if previewScores[0] > 0 { previewScores[0] -= 1 } }
@@ -329,7 +339,7 @@ struct CourtPage: View {
                         Text("树莓派计分").tag("pi")
                         Text("手机计分").tag("phone")
                     }.pickerStyle(.segmented)
-                    Button("进入主机已创建的比赛 / 观赛") { sharedMatches = true }
+                    Button("进入主机已创建的比赛 / 观赛") { sharedMatchesPiOnly = true; sharedMatches = true }
                     if !hostAvailable { Note(text:"树莓派当前不可用，可检查连接，或选择手机计分。") }
                     if scoringAuthority == "phone" {
                     Note(text:"比分由这部手机保存；拍底需已关联到本场球员并完成计分连接。")
@@ -347,8 +357,9 @@ struct CourtPage: View {
                 }
                 #endif
                 if scoringAuthority == "pi" && social.context == nil {
-                    Note(text:"请在树莓派屏幕开赛，上传后从这里进入同一场比赛。选择树莓派计分不会自动切换拍底的连接模式。")
-                    Button("进入树莓派比赛") { sharedMatches = true }.buttonStyle(PrimaryStyle())
+                    Note(text:"可从手机发送名单给树莓派开赛，也可进入屏幕已创建的比赛。比分由树莓派确认。")
+                    Button("用当前名单在树莓派开赛") { piStart = true }.buttonStyle(PrimaryStyle()).disabled(associationContext == nil || store.selected == nil)
+                    Button("进入树莓派比赛") { sharedMatchesPiOnly = true; sharedMatches = true }.buttonStyle(PrimaryStyle())
                     Button("配置拍底连接树莓派") { hostRacketConfiguration = true }
                         .frame(minHeight:44).disabled(associationContext == nil)
                 } else if social.context != nil {
@@ -356,7 +367,7 @@ struct CourtPage: View {
                 }
                 if racketStartBlocked { Note(text: "本场拍底名单尚未获得当前主机确认，请到球员与拍底查询或刷新。") }
                 if store.selected == nil { Button("连接设备后开始",action:openDevices).frame(minHeight:44) }
-                if session?.hasOldScore == true || hasMatch {
+                if syncedHostMatch == nil && (session?.hasOldScore == true || hasMatch) {
                     Note(text:"设备上已有比分或暂存球局，可以继续比赛，或确认放弃后重新开始。")
                     HStack { Button("回到球局") { stage = "live" };Spacer();Button("结束旧球局") { if session?.current?.hasID == true && ["a", "p"].contains(session?.current?.state ?? "") { earlyResult = true; result = true } else { discard = true } }.disabled(session?.can("A") != true || !groupDeviceReady) }.font(.system(size:14)).frame(minHeight:44)
                 }
@@ -364,6 +375,11 @@ struct CourtPage: View {
             }
             if let session = session, !session.fresh { Button("重新同步比分") { session.send("Q") }.frame(minHeight:44).disabled(!session.can("Q")) }
         }
+    }
+    private func prepareNextHostMatch() {
+        scoringAuthority = "pi"
+        rosterMatchKey = UUID().uuidString
+        stage = "prepare"
     }
     private func loadPhoneAvailability() {
         guard social.verifiedBusiness, !social.userID.isEmpty else { phoneUnfinished = false; return }
@@ -526,7 +542,7 @@ struct ResultSheet: View {
 }
 
 // A frozen presentation of the saved result; no DP commands or media generation.
-private struct MatchCelebration: Identifiable {
+struct MatchCelebration: Identifiable {
     let id = UUID()
     let player: String?
     let scores: [UInt8]
@@ -681,7 +697,7 @@ private enum MVPTimeline {
     }
 }
 
-private struct PortraitMVPView: View {
+struct PortraitMVPView: View {
     let result: MatchCelebration
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

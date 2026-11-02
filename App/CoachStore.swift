@@ -19,6 +19,8 @@ import Combine
     @Published private(set) var pendingAnswer = ""
     @Published private(set) var pendingID = UUID()
     @Published private(set) var error = ""
+    @Published private(set) var conversations: [CoachConversation] = []
+    @Published private(set) var activeConversationID = UUID()
     private let defaults: UserDefaults
     private let stream: ReferencedStreamingReply
     private var context: CoachContext?
@@ -51,11 +53,40 @@ import Combine
         guard value != context else { return }
         cancel()
         context = value
-        let history = value.flatMap { defaults.data(forKey: $0.storageKey) }.flatMap { try? JSONDecoder().decode(CoachHistory.self, from: $0) } ?? CoachHistory()
+        let stored = value.flatMap { defaults.data(forKey: $0.storageKey + ".conversations") }
+            .flatMap { try? JSONDecoder().decode(CoachConversations.self, from: $0) }
+        if let stored, !stored.items.isEmpty {
+            conversations = stored.items
+            activeConversationID = stored.items.contains(where: { $0.id == stored.activeID }) ? stored.activeID : stored.items[0].id
+        } else {
+            let legacy = value.flatMap { defaults.data(forKey: $0.storageKey) }
+                .flatMap { try? JSONDecoder().decode(CoachHistory.self, from: $0) } ?? CoachHistory()
+            let initial = CoachConversation(history: legacy)
+            conversations = [initial]; activeConversationID = initial.id
+        }
+        restoreActive()
+        save()
+    }
+
+    private func restoreActive() {
+        let history = conversations.first(where: { $0.id == activeConversationID })?.history ?? CoachHistory()
         restoring = true
-        messages = Array(history.messages.suffix(100)); draft = history.draft; references=history.references ?? []
-        restoring = false
-        error = ""
+        messages = Array(history.messages.suffix(100)); draft = history.draft; references = history.references ?? []
+        restoring = false; error = ""
+    }
+
+    func newConversation() {
+        cancel(); save()
+        if messages.isEmpty && draft.isEmpty && references.isEmpty { return }
+        let next = CoachConversation()
+        conversations.insert(next, at: 0); activeConversationID = next.id
+        restoreActive(); save()
+    }
+
+    func openConversation(_ id: UUID) {
+        guard id != activeConversationID, conversations.contains(where: { $0.id == id }) else { return }
+        cancel(); save()
+        activeConversationID = id; restoreActive(); save()
     }
 
     /// Closing the screen or changing identity preserves partial text in its original scope.
@@ -128,7 +159,13 @@ import Combine
     }
 
     private func save() {
-        guard let context, let data = try? JSONEncoder().encode(CoachHistory(messages: messages, draft: draft,references:references.isEmpty ? nil : references)) else { return }
-        defaults.set(data, forKey: context.storageKey)
+        guard !restoring, let context,
+              let index = conversations.firstIndex(where: { $0.id == activeConversationID }) else { return }
+        let history = CoachHistory(messages: messages, draft: draft, references: references.isEmpty ? nil : references)
+        conversations[index].history = history
+        conversations[index].updatedAt = Date()
+        let archive = CoachConversations(activeID: activeConversationID, items: conversations)
+        guard let data = try? JSONEncoder().encode(archive) else { return }
+        defaults.set(data, forKey: context.storageKey + ".conversations")
     }
 }

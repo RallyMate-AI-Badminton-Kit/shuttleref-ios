@@ -19,6 +19,8 @@ struct CoachPage: View {
     @EnvironmentObject var social: GatheringStore
     @EnvironmentObject private var replays:ReplayStore
     @StateObject private var coach: CoachStore
+    @State private var historyList = false
+    @State private var openHistorySelection = false
     @State private var options = false
     @State private var chat = false
     @State private var focusOnOpen = false
@@ -53,7 +55,7 @@ struct CoachPage: View {
     private func consumeLaunch() {
         guard let reference=replays.consumeLaunch(for:context) else { return }
         coach.bind(context);coach.selectReference(reference)
-        openChat(prompt:"请结合引用记录，介绍这场比赛的最后一分。",focus:false)
+        openChat(prompt:reference.type == "match" ? "请优先结合这场比赛已关联的视频观测，复盘当前分析球员的移动与姿态变化，指出值得回看的时间段，并给出具体训练建议。" : "请介绍引用的最后一分，并告诉我回看这段视频时可以重点留意什么。",focus:false)
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -66,7 +68,7 @@ struct CoachPage: View {
                     HStack {
                         Text("你的场边伙伴").font(.subheadline).foregroundColor(Palette.muted)
                         Spacer()
-                        Button { openChat() } label: { Label("历史对话", systemImage: "clock") }.font(.subheadline)
+                        Button { coach.bind(context); historyList = true } label: { Label("历史会话", systemImage: "clock") }.font(.subheadline)
                     }
                     if visible {
                         HStack { Spacer(); ShuttleCompanion(color: [Palette.green, Palette.blue, Color(hex: 0xa98963)][min(max(colorIndex, 0), 2)]); Spacer() }
@@ -79,6 +81,7 @@ struct CoachPage: View {
                     Button { openChat(focus: coach.messages.isEmpty) } label: {
                         HStack { Text(coach.messages.isEmpty ? "和\(name)聊聊" : "继续和\(name)聊"); Spacer(); Image(systemName: "arrow.up.right") }.padding(.horizontal, 20)
                     }.buttonStyle(PrimaryStyle()).accessibilityIdentifier("coach-open-chat")
+                    Button { coach.bind(context); coach.newConversation(); openChat(focus: true) } label: { Label("新建对话", systemImage: "square.and.pencil") }.frame(maxWidth: .infinity)
                     VStack(alignment: .leading, spacing: 10) {
                         Text("也可以从这里聊起").font(.caption).foregroundColor(Palette.muted)
                         ForEach(prompts, id: \.self) { prompt in
@@ -92,6 +95,9 @@ struct CoachPage: View {
                 }.padding(22)
             }
         }
+        .sheet(isPresented: $historyList, onDismiss: {
+            if openHistorySelection { openHistorySelection = false; openChat() }
+        }) { CoachHistoryPage(coach: coach, name: name, onSelect: { openHistorySelection = true }) }
         .onAppear { coach.bind(context);consumeLaunch() }
         .onChange(of:replays.launch?.id) { _ in consumeLaunch() }
         #if UI_PREVIEW && DEBUG
@@ -147,6 +153,9 @@ private struct CoachChatPage: View {
                     #endif
                 }
                 Spacer()
+                Button { inputFocused = false; coach.newConversation() } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 20)).frame(width: 44, height: 44)
+                }.accessibilityLabel("新建对话").accessibilityIdentifier("coach-new-conversation")
                 Button { inputFocused = false; history = true } label: {
                     Image(systemName: "clock").font(.system(size: 20)).frame(width: 44, height: 44)
                 }.accessibilityLabel("历史对话").accessibilityIdentifier("coach-history")
@@ -253,7 +262,7 @@ private struct CoachChatPage: View {
                 Button { inputFocused=false;referencePicker=true } label: { Label("引用比赛",systemImage:"plus.circle").font(.caption) }
                     .disabled(coach.sending || context==nil).accessibilityIdentifier("coach-add-reference")
                 if let reference=coach.references.first {
-                    Text((reference.is_demo == true ? "演示 · " : "")+(reference.label ?? "比赛引用")).font(.caption).lineLimit(2)
+                    Text(reference.label ?? "比赛引用").font(.caption).lineLimit(2)
                     Spacer(minLength:0)
                     Button { coach.selectReference(nil) } label: { Image(systemName:"xmark.circle.fill").frame(width:30,height:30) }
                         .disabled(coach.sending).accessibilityLabel("移除比赛引用").accessibilityIdentifier("coach-remove-reference")
@@ -318,7 +327,7 @@ private struct CoachBubble: View {
                     Label(name, systemImage: "sparkles").font(.caption.weight(.semibold)).foregroundColor(Palette.muted)
                 }
                 if message.role == "user" {
-                    if let reference=message.references?.first { Text("引用："+(reference.label ?? "演示比赛")).font(.caption).foregroundColor(Palette.muted) }
+                    if let reference=message.references?.first { Text("引用："+(reference.label ?? "比赛回放")).font(.caption).foregroundColor(Palette.muted) }
                     Text(message.content).font(.body).lineSpacing(6).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -348,17 +357,42 @@ private struct CoachBubble: View {
 }
 
 private struct CoachHistoryPage: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var coach: CoachStore
     let name: String
+    var onSelect: () -> Void = {}
+    private var items: [CoachConversation] {
+        coach.conversations.filter { !$0.history.messages.isEmpty || !$0.history.draft.isEmpty || !($0.history.references ?? []).isEmpty }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
     var body: some View {
         VStack(spacing: 20) {
-            SheetHeader(title: "历史对话")
-            Text("仅此账号在本机的最近对话").font(.caption).foregroundColor(Palette.muted)
-            if coach.messages.isEmpty {
-                EmptyCard(icon: "bubble.left.and.bubble.right", title: "还没有对话", detail: "向教练发送问题后，成功的对话会保存在本机。")
+            SheetHeader(title: "历史会话")
+            Text("此账号的对话保存在这台手机上").font(.caption).foregroundColor(Palette.muted)
+            Button { coach.newConversation(); onSelect(); dismiss() } label: {
+                Label("新建对话", systemImage: "square.and.pencil").frame(maxWidth: .infinity).padding()
+            }.background(Palette.soft).cornerRadius(16)
+            if items.isEmpty {
+                EmptyCard(icon: "bubble.left.and.bubble.right", title: "还没有对话", detail: "发送问题后，可以在这里找回并继续聊。")
                 Spacer()
             } else {
-                ScrollView { LazyVStack(spacing: 24) { ForEach(coach.messages) { CoachBubble(message: $0, name: name) } } }
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(items) { item in
+                            Button { coach.openConversation(item.id); onSelect(); dismiss() } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text(item.title).font(.headline).lineLimit(2)
+                                        Text(item.updatedAt, style: .date).font(.caption).foregroundColor(Palette.muted)
+                                        Text(item.history.messages.last?.content ?? "草稿").font(.subheadline).foregroundColor(Palette.muted).lineLimit(2)
+                                    }
+                                    Spacer()
+                                    Image(systemName: item.id == coach.activeConversationID ? "checkmark.circle.fill" : "chevron.right")
+                                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.plain).background(Palette.soft).cornerRadius(16)
+                        }
+                    }
+                }
             }
         }.padding(22).background(Palette.background.ignoresSafeArea()).foregroundColor(Palette.ink)
     }

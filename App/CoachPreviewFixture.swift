@@ -116,7 +116,7 @@ import UIKit
   "match_id": "bc268761d8e55466a17a47853fbe3dff",
   "owner_id": "ui-preview",
   "is_demo": true,
-  "title": "binbin 的视频回放演示赛",
+  "title": "止戈 / 简宁 vs 玉琮 / Clio",
   "played_at": "2026-10-30T03:00:00Z",
   "date_source": "demo_fixture",
   "round": {
@@ -129,25 +129,25 @@ import UIKit
   "participants": [
     {
       "id": "red-1",
-      "name": "binbin",
+      "name": "止戈",
       "user_id": "ui-preview",
       "side": "red"
     },
     {
       "id": "red-2",
-      "name": "演示搭档",
+      "name": "简宁",
       "user_id": null,
       "side": "red"
     },
     {
       "id": "blue-1",
-      "name": "演示对手 A",
+      "name": "玉琮",
       "user_id": null,
       "side": "blue"
     },
     {
       "id": "blue-2",
-      "name": "演示对手 B",
+      "name": "Clio",
       "user_id": null,
       "side": "blue"
     }
@@ -215,7 +215,143 @@ import UIKit
   },
   "score_source": "demo_fixture",
   "participant_to_video_track_mapping": null,
-  "notice": "演示比赛：比分、参赛角色和最后一分关联为设定；录像为实拍，尚未导入视觉分析。"
+  "notice": "演示比赛：比分、MVP 与击球统计为模拟设定；视频为实拍，尚未进行视觉动作分析。",
+  "demo_mvp": {
+    "participant_id": "blue-1",
+    "name": "玉琮",
+    "source": "demo_fixture",
+    "reason": "全场击球 186 次，杀球 52 次；攻防表现突出，获选本场 MVP。"
+  },
+  "demo_shot_stats": [
+    {
+      "participant_id": "red-1",
+      "name": "止戈",
+      "total": 176,
+      "source": "demo_fixture",
+      "shots": [
+        {
+          "type": "杀球",
+          "count": 42
+        },
+        {
+          "type": "高远球",
+          "count": 48
+        },
+        {
+          "type": "平抽球",
+          "count": 35
+        },
+        {
+          "type": "吊球",
+          "count": 22
+        },
+        {
+          "type": "挑球",
+          "count": 18
+        },
+        {
+          "type": "网前球",
+          "count": 11
+        }
+      ]
+    },
+    {
+      "participant_id": "red-2",
+      "name": "简宁",
+      "total": 174,
+      "source": "demo_fixture",
+      "shots": [
+        {
+          "type": "杀球",
+          "count": 28
+        },
+        {
+          "type": "高远球",
+          "count": 45
+        },
+        {
+          "type": "平抽球",
+          "count": 38
+        },
+        {
+          "type": "吊球",
+          "count": 25
+        },
+        {
+          "type": "挑球",
+          "count": 24
+        },
+        {
+          "type": "网前球",
+          "count": 14
+        }
+      ]
+    },
+    {
+      "participant_id": "blue-1",
+      "name": "玉琮",
+      "total": 186,
+      "source": "demo_fixture",
+      "shots": [
+        {
+          "type": "杀球",
+          "count": 52
+        },
+        {
+          "type": "高远球",
+          "count": 46
+        },
+        {
+          "type": "平抽球",
+          "count": 41
+        },
+        {
+          "type": "吊球",
+          "count": 20
+        },
+        {
+          "type": "挑球",
+          "count": 17
+        },
+        {
+          "type": "网前球",
+          "count": 10
+        }
+      ]
+    },
+    {
+      "participant_id": "blue-2",
+      "name": "Clio",
+      "total": 176,
+      "source": "demo_fixture",
+      "shots": [
+        {
+          "type": "杀球",
+          "count": 31
+        },
+        {
+          "type": "高远球",
+          "count": 42
+        },
+        {
+          "type": "平抽球",
+          "count": 39
+        },
+        {
+          "type": "吊球",
+          "count": 28
+        },
+        {
+          "type": "挑球",
+          "count": 23
+        },
+        {
+          "type": "网前球",
+          "count": 13
+        }
+      ]
+    }
+  ]
 }
 """#.utf8))
     static func makeStore()->ReplayStore {

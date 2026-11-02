@@ -56,6 +56,21 @@ struct CoachHistory: Codable {
     }
 }
 
+struct CoachConversation: Codable, Identifiable {
+    var id = UUID()
+    var updatedAt = Date()
+    var history = CoachHistory()
+    var title: String {
+        let text = history.messages.first(where: { $0.role == "user" })?.content ?? history.draft
+        return text.isEmpty ? "新对话" : String(text.prefix(32))
+    }
+}
+
+struct CoachConversations: Codable {
+    var activeID: UUID
+    var items: [CoachConversation]
+}
+
 struct CoachFailure: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }

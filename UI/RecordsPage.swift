@@ -3,6 +3,8 @@ import SwiftUI
 struct RecordsPage: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var social: GatheringStore
+    @EnvironmentObject private var replays: ReplayStore
+    @State private var selectedShowcase: ReplayMatch?
     let openMatch: () -> Void
     @State private var period = RecordPeriod.month
     @State private var anchor = Date()
@@ -39,7 +41,23 @@ struct RecordsPage: View {
         (selectedDay == nil || calendar.isDate(row.date, inSameDayAs: selectedDay!))
             && (filter == "全部" || (filter == "已完赛" ? !row.early : row.early))
     } }
-    private var dateGroups: [Date] { Array(Set(rows.map { calendar.startOfDay(for: $0.date) })).sorted(by: >) }
+    private func showcaseDate(_ match: ReplayMatch) -> Date? { ISO8601DateFormatter().date(from: match.played_at) }
+    private var periodShowcase: [ReplayMatch] {
+        replays.matches.filter { match in
+            guard match.is_demo,match.points.isEmpty,let date=showcaseDate(match) else { return false }
+            return period.contains(date,anchor:anchor)
+        }.sorted { $0.played_at > $1.played_at }
+    }
+    private var showcaseRows: [ReplayMatch] {
+        periodShowcase.filter { match in
+            guard filter != "提前结束",let date=showcaseDate(match) else { return false }
+            return selectedDay == nil || calendar.isDate(date,inSameDayAs:selectedDay!)
+        }
+    }
+    private var dateGroups: [Date] {
+        Array(Set((rows.map { $0.date } + showcaseRows.compactMap(showcaseDate)).map { calendar.startOfDay(for:$0) })).sorted(by:>)
+    }
+    private var calendarDates: [Date] { periodRows.map { $0.date } + periodShowcase.compactMap(showcaseDate) }
     private var activeDays: Int { Set(periodRows.map { calendar.startOfDay(for: $0.date) }).count }
     private var days: [Date] {
         guard let interval = calendar.dateInterval(of: period.component, for: anchor) else { return [] }
@@ -80,11 +98,15 @@ struct RecordsPage: View {
                     } else { Button("登录羽小裁，同步战绩") { accountCenter = true } }
                     if !refreshError.isEmpty { Note(text: refreshError) }
                     if !social.recordsMessage.isEmpty { Note(text: social.recordsMessage) }
-                    if rows.isEmpty { EmptyCard(icon: "flag.checkered", title: "这里还没有比赛记录", detail: "换个日期看看，或开始一场新的球局。普通比赛和组局成绩都会出现在这里。") }
+                    if rows.isEmpty && showcaseRows.isEmpty { EmptyCard(icon: "flag.checkered", title: "这里还没有比赛记录", detail: "换个日期看看，或开始一场新的球局。普通比赛和组局成绩都会出现在这里。") }
                     ForEach(dateGroups, id: \.self) { day in
                         Text(day.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundColor(Palette.muted)
                         ForEach(rows.filter { calendar.isDate($0.date, inSameDayAs: day) }) { row in recordCard(row) }
+                        ForEach(showcaseRows.filter { showcaseDate($0).map { calendar.isDate($0,inSameDayAs:day) } ?? false }) { match in
+                            showcaseCard(match)
+                        }
                     }
+                    if !periodShowcase.isEmpty { Text("标记为演示的比赛仅用于展示，不计入上方真实统计。").font(.caption).foregroundColor(Palette.muted) }
                     ReplayRecordsSection()
                     Note(text: "提前结束保留比分，不判定胜负。仅本机成绩需保存到当前账号后才能跨手机查看。")
                 }.padding(22)
@@ -92,6 +114,8 @@ struct RecordsPage: View {
         }
         .task(id: social.userID + social.origin) { selectedRecord = nil; await refresh() }
         .sheet(isPresented: $accountCenter) { AccountCenter() }
+        .onChange(of: replays.context) { _ in selectedShowcase=nil }
+        .sheet(item: $selectedShowcase) { match in ReplayMatchDetail(match:match,ask:{ _ in }).environmentObject(replays) }
         .sheet(item: $selectedRecord) { MatchRecapPage(record: $0) }
         .confirmationDialog("保存到当前战绩账号", isPresented: Binding(get: { importRecord != nil }, set: { if !$0 { importRecord = nil } })) {
             Button("保存到「" + (social.credentials?.user.name ?? "") + "」") {
@@ -110,7 +134,7 @@ struct RecordsPage: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
             ForEach(1...12, id: \.self) { month in
                 let date = calendar.date(from: DateComponents(year: calendar.component(.year, from: anchor), month: month))!
-                let count = periodRows.filter { calendar.isDate($0.date, equalTo: date, toGranularity: .month) }.count
+                let count = calendarDates.filter { calendar.isDate($0, equalTo: date, toGranularity: .month) }.count
                 Button { anchor = date; period = .month; selectedDay = nil } label: {
                     VStack(spacing: 9) { Text("\(month) 月").font(.subheadline); Text(count == 0 ? "—" : "\(count) 场").font(.headline).foregroundColor(count == 0 ? Palette.muted : Palette.green) }.frame(maxWidth: .infinity).padding(.vertical, 18).background(count == 0 ? Color.white : Palette.soft).cornerRadius(16)
                 }.buttonStyle(.plain)
@@ -126,7 +150,7 @@ struct RecordsPage: View {
                 }
                 ForEach(days, id: \.self) { date in
                     let selected = selectedDay.map { calendar.isDate($0, inSameDayAs: date) } ?? false
-                    let count = periodRows.filter { calendar.isDate($0.date, inSameDayAs: date) }.count
+                    let count = calendarDates.filter { calendar.isDate($0, inSameDayAs: date) }.count
                     Button { selectedDay = selected ? nil : date } label: {
                         VStack(spacing: 4) {
                             Text("\(calendar.component(.day, from: date))").font(.system(size: 14, weight: calendar.isDateInToday(date) ? .bold : .regular))
@@ -136,6 +160,25 @@ struct RecordsPage: View {
                 }
             }
         }.padding(14).background(Color.white).cornerRadius(20)
+    }
+    private func showcaseCard(_ match: ReplayMatch) -> some View {
+        Button { selectedShowcase=match } label: {
+            VStack(alignment:.leading,spacing:14) {
+                HStack {
+                    Text(match.mode=="singles" ? "单打" : "双打").font(.headline)
+                    Spacer()
+                    Text("已完赛 · 演示").font(.caption).foregroundColor(Palette.muted)
+                }
+                HStack {
+                    Text(match.participants.filter { $0.side=="red" }.map { $0.name }.joined(separator:" / ")).frame(maxWidth:.infinity,alignment:.leading)
+                    Text("\(match.result.red_games) : \(match.result.blue_games)").font(.system(size:28,weight:.bold,design:.rounded))
+                    Text(match.participants.filter { $0.side=="blue" }.map { $0.name }.joined(separator:" / ")).frame(maxWidth:.infinity,alignment:.trailing)
+                }.font(.subheadline)
+                if let mvp=match.demo_mvp { Label("MVP · "+mvp.name+"（模拟）",systemImage:"star.fill").font(.caption).foregroundColor(Palette.green) }
+                Text(match.games.map { "\($0.red):\($0.blue)" }.joined(separator:"  ·  ")).font(.caption)
+                HStack { Text("展示数据 · 已同步到当前账号").font(.caption2).foregroundColor(Palette.muted);Spacer();Image(systemName:"arrow.up.right") }
+            }.padding(20).background(Color.white).cornerRadius(22)
+        }.buttonStyle(.plain).accessibilityIdentifier("records-showcase-match")
     }
     private func recordCard(_ row: RecordEntry) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -155,6 +198,8 @@ struct RecordsPage: View {
         guard !refreshing else { return }
         refreshing = true; refreshError = ""; defer { refreshing = false }
         do { try await social.refreshRecords() } catch { refreshError = "刷新未完成，仍显示已有记录：" + error.localizedDescription }
+        await replays.refresh()
+        if !replays.error.isEmpty { refreshError += (refreshError.isEmpty ? "" : "\n") + replays.error }
     }
 }
 

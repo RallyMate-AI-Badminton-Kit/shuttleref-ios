@@ -94,22 +94,31 @@ import SwiftUI
             let connection = UUID()
             let link = PhoneScoreLink(session:session,transport:service.transport,connection:connection,clock:{ DispatchTime.now().uptimeNanoseconds / 1_000_000 })
             self.link = link; selectedCandidate = candidate; connectedDeviceID = verified.device.id
+            var receivedScoreFrames = 0
+            var scoreConfigurationError: String?
             service.transport.scoreNotification = { [weak self, weak link] data in
                 Task { @MainActor in
                     guard let self, let link, self.link === link else { return }
+                    receivedScoreFrames += 1
+                    RacketDiagnosticLog.shared.record(.bleReply,code:"SCORE_NOTIFY",length:data.count)
                     do { try await link.notification(data); self.message = session.needsReview ? "请核对比分后重新连接拍底。" : session.readyForScoring ? "拍底已就绪 · 双敲加分，三敲撤回" : "正在等待拍底确认比赛配置…" }
-                    catch { self.message = "拍底需重新确认：" + error.localizedDescription }
+                    catch { scoreConfigurationError = error.localizedDescription; self.message = "拍底需重新确认：" + error.localizedDescription; RacketDiagnosticLog.shared.record(.failed,code:"SCORE_REPLY_INVALID") }
                     self.refresh()
                 }
             }
             service.transport.scoreDisconnected = { [weak self] in self?.link?.disconnected(); self?.message = "拍底已断开：" + (self?.service.transport.scoreDisconnectReason ?? "") + "；可继续手动计分。" }
             let config = try session.prepare(info:info,authenticatedDevice:verified.device.id,owner:context.userID.lowercased(),associationRevision:UInt32(binding.revision),side:participant.side,connection:connection,subscribed:true,controlOwner:controlOwner)
+            RacketDiagnosticLog.shared.record(.request,device:verified.device.id,code:"SCORE_CONFIG")
             try await link.send(config)
+            RacketDiagnosticLog.shared.record(.request,device:verified.device.id,code:"SCORE_CONFIG_WRITTEN")
             message = "正在等待拍底确认比赛配置…"
             Task { [weak self, weak link] in
                 try? await Task.sleep(nanoseconds:5_000_000_000)
                 guard let self, let link, self.link === link, !session.readyForScoring else { return }
-                self.stopLink(); self.message = "拍底配置未确认，请重新连接；本机比分已保留。"
+                self.stopLink()
+                RacketDiagnosticLog.shared.record(.failed,code:scoreConfigurationError == nil ? "SCORE_CONFIG_TIMEOUT":"SCORE_CONFIG_REJECTED",length:receivedScoreFrames)
+                if let error = scoreConfigurationError { self.message = "拍底配置未确认：" + error + " 本机比分已保留。" }
+                else { self.message = "拍底配置未确认：已写入配置，收到计分通知 \(receivedScoreFrames) 帧。请核对拍底为手机蓝牙模式，再重新连接；本机比分已保留。" }
             }
             timer = Task { [weak self, weak link] in
                 while !Task.isCancelled {

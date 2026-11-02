@@ -52,6 +52,7 @@ final class MatchSession: ObservableObject {
         self.defaults = defaults; self.online = online; self.sender = sender
         if let cache = cache { current = MatchSnapshot(cache) }
         if let data = defaults.data(forKey: key) { saved = try? JSONDecoder().decode(MatchSnapshot.self, from: data) }
+        if let saved, completedResults.contains(where: { $0.id == saved.id }) { save(nil) }
     }
     var phase: String { current?.finished == true ? "已结束" : current?.state == "p" ? "已暂存" : current?.state == "a" ? "比赛中" : "待机" }
     var hasOldScore: Bool { current?.scores.prefix(4).contains(where: { $0 != 0 }) == true }
@@ -96,7 +97,10 @@ final class MatchSession: ObservableObject {
         if let old = current, s.token < old.token { return }
         current = s
         observe(s)
-        if s.state == "p", s.hasID, s.code == 0 { save(s) }
+        if s.state == "p", s.hasID, s.code == 0 {
+            if !completedResults.contains(where: { $0.id == s.id }) { save(s) }
+            else if saved?.id == s.id { save(nil) }
+        }
         guard let p = pending, s.token == p.token || s.code == 3 && s.token > p.token else { return }
         timer?.invalidate(); pending = nil
         let identityOK = p.op == "Q" || s.id == p.id

@@ -82,6 +82,41 @@ private final class CoachProtocol: URLProtocol {
         await pending.value
         precondition(delayed.messages.isEmpty && delayed.draft == "保留问题" && !delayed.sending)
 
+        // Independent conversations retain drafts and migrate the previous single history.
+        let migratedContext = CoachContext(origin: a.origin, userID: "legacy", token: "test")
+        let legacy = CoachHistory(messages: [CoachMessage(role: "user", content: "旧问题"), CoachMessage(role: "assistant", content: "旧回答")], draft: "旧草稿")
+        defaults.set(try JSONEncoder().encode(legacy), forKey: migratedContext.storageKey)
+        var inputs: [[CoachWireMessage]] = []
+        let multi = CoachStore(defaults: defaults) { _, messages in inputs.append(messages); return "新回答" }
+        multi.bind(migratedContext)
+        let oldReference = CoachReference(type: "match", id: "match-a")
+        multi.selectReference(oldReference)
+        let originalID = multi.activeConversationID
+        precondition(multi.messages.count == 2 && multi.draft == "旧草稿")
+        multi.newConversation()
+        let newID = multi.activeConversationID
+        precondition(newID != originalID && multi.messages.isEmpty && multi.draft.isEmpty && multi.references.isEmpty)
+        multi.newConversation(); precondition(multi.activeConversationID == newID)
+        multi.draft = "全新问题"; await multi.send()
+        precondition(inputs.last?.count == 1)
+        multi.draft = "第二场草稿"
+        multi.openConversation(originalID)
+        precondition(multi.messages.first?.content == "旧问题" && multi.draft == "旧草稿" && multi.references == [oldReference])
+        multi.openConversation(newID)
+        precondition(multi.messages.first?.content == "全新问题" && multi.draft == "第二场草稿")
+        let reopened = CoachStore(defaults: defaults)
+        reopened.bind(migratedContext)
+        precondition(reopened.activeConversationID == newID && reopened.conversations.count == 2)
+        reopened.bind(b); precondition(!reopened.conversations.contains(where: { $0.id == newID }))
+        var late: CheckedContinuation<String, Never>?
+        let switching = CoachStore(defaults: defaults) { _, _ in await withCheckedContinuation { late = $0 } }
+        switching.bind(migratedContext); switching.draft = "迟到回复"
+        let switchingTask = Task { await switching.send() }
+        while late == nil { await Task.yield() }
+        switching.newConversation(); late!.resume(returning: "旧会话迟到内容")
+        await switchingTask.value
+        precondition(switching.messages.isEmpty && switching.draft.isEmpty && !switching.sending)
+
         let pairs = (0..<20).flatMap { i in [CoachMessage(role: "user", content: "q\(i)"), CoachMessage(role: "assistant", content: String(repeating: "答", count: 4000))] }
         let context = CoachHistory.context(pairs, question: "下一步")
         precondition(context.count <= 13 && context.count % 2 == 1)
@@ -109,8 +144,9 @@ private final class CoachProtocol: URLProtocol {
         precondition(rich.reply == "比赛摘要" && rich.blocks?.count == 2)
         let history = CoachHistory(messages: [CoachMessage(role: "user", content: "看看比赛"),
             CoachMessage(role: "assistant", content: rich.reply, blocks: rich.blocks)])
-        defaults.set(try JSONEncoder().encode(history), forKey:a.storageKey)
-        let richStore = CoachStore(defaults:defaults); richStore.bind(a)
+        let richScope = CoachContext(origin: a.origin, userID: "rich-legacy", token: "test")
+        defaults.set(try JSONEncoder().encode(history), forKey:richScope.storageKey)
+        let richStore = CoachStore(defaults:defaults); richStore.bind(richScope)
         precondition(richStore.messages.last?.displayBlocks.last?.metrics?.first?.value == "12")
         precondition(CoachHistory.context(richStore.messages, question:"继续")[1].content == "比赛摘要")
         CoachProtocol.handler = { _ in (503, Data("{\"code\":\"COACH_NOT_CONFIGURED\",\"error\":\"secret upstream body\"}".utf8)) }

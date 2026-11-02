@@ -27,11 +27,31 @@ struct ReplayMatch: Codable, Identifiable {
     let result: ReplayResult
     let points: [ReplayPoint]
     let notice: String
+    var demo_shot_stats: [ReplayShotStats]? = nil
+    var demo_mvp: ReplayDemoMVP? = nil
+    var demo_duration_seconds: Int? = nil
+    var demo_timeline: [ReplayDemoEvent]? = nil
     var id: String { match_id }
     var reference: CoachReference { .init(type:"match",id:match_id,match_id:match_id,label:title,is_demo:is_demo) }
     func reference(to point:ReplayPoint) -> CoachReference {
         .init(type:"point",id:point.point_id,match_id:match_id,label:"第三局 · 最后一分",is_demo:is_demo)
     }
+}
+struct ReplayDemoMVP: Codable {
+    let participant_id:String
+    let name:String
+    let source:String
+    let reason:String
+}
+struct ReplayDemoEvent: Codable, Identifiable {
+    let id:String
+    let game_number:Int
+    let point_number:Int
+    let red:Int
+    let blue:Int
+    let winner_side:String
+    let elapsed_seconds:Int
+    let source:String
 }
 struct ReplayParticipant: Codable { let id:String;let name:String;let user_id:String?;let side:String }
 struct ReplayGame: Codable,Identifiable { let game_id:String;let number:Int;let red:Int;let blue:Int;let winner_side:String;var id:String { game_id } }
@@ -96,3 +116,9 @@ final class ReplayClient {
         return try JSONDecoder().decode(T.self,from:data)
     }
 }
+
+struct ReplayShotStats: Codable, Identifiable {
+    let participant_id:String; let name:String; let total:Int; let source:String; let shots:[ReplayShotCount]
+    var id:String { participant_id }
+}
+struct ReplayShotCount: Codable { let type:String; let count:Int }

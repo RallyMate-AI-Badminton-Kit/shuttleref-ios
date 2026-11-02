@@ -32,6 +32,16 @@ import Foundation
         relaunched.send("Q"); relaunched.receive("@1:\(mid):00000006:p:1,0,0,0,0:0")
         try relaunched.settle(names: result.names, doubles: false, mvpSlot: nil, early: true)
         precondition(relaunched.completedResults.first?.observations?.count == 3, "Observed scores persist across relaunch; repeated snapshots are not new scoring events")
+        let staleKey="shuttleref.spike.match.u.d"
+        defaults.set(try JSONEncoder().encode(relaunched.completedResults[0].snapshot),forKey:staleKey)
+        let cleaned=MatchSession(accountID:"u",deviceID:"d",online:false,cache:nil,defaults:defaults) { _,done in done(nil) }
+        precondition(cleaned.saved==nil,"Settled match must not remain resumable")
+        precondition(cleaned.completedResults.count==1,"Keep finished result")
+        cleaned.receive("@1:\(mid):00000007:p:1,0,0,0,0:0")
+        precondition(cleaned.saved==nil,"Late paused report must not recreate settled save")
+        let another=String(repeating:"b",count:32)
+        cleaned.receive("@1:\(another):00000008:p:2,0,0,0,0:0")
+        precondition(cleaned.saved?.id==another,"Unsettled saves must remain")
         print("PASS: week/month boundaries, old result decoding, singles lineup and format constraints")
     }
 }

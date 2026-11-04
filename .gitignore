@@ -1,0 +1,21 @@
+# Private SDK, signing and local credentials
+/Local/
+/ios_core_sdk/
+/config/local/
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+*.key
+*.pem
+# Dependencies and build products
+/Pods/
+/DerivedData/
+/build/
+*.xcarchive
+*.ipa
+**/xcuserdata/
+.DS_Store
+__pycache__/
+.pytest_cache/

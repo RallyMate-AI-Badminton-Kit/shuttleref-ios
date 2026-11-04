@@ -1,0 +1,51 @@
+{
+  "source_repository": "https://github.com/yahabibib/shuttleref",
+  "source_commit": "64889f4916aa63ef249572203a53b9c0c3e5b6d7",
+  "files": [
+    {
+      "path": "Tests/Support/score-core/score_engine.c",
+      "source_path": "shuttleref/core/src/score_engine.c",
+      "sha256": "68f054591bf39490fc4dc5c80d355ed3ebc0a73675a41f39dc5ab50ae5ccc691"
+    },
+    {
+      "path": "Tests/Support/score-core/score_engine.h",
+      "source_path": "shuttleref/core/include/score_engine.h",
+      "sha256": "da4862ecc35983d2cd11136657b2adfab0db9d8a9a67e6c437e823a8d89556e9"
+    },
+    {
+      "path": "Tests/Support/racket-wire/phone_score_protocol.h",
+      "source_path": "source/racket_matrix_client/src/phone_score_protocol.h",
+      "sha256": "5c2d28d7cb6200b3fa11abe168afa15b5bc25288ed42be49c41453aae439392b"
+    },
+    {
+      "path": "docs/contracts/racket-phone-score-v1/vectors.json",
+      "source_path": "docs/contracts/racket-phone-score-v1/vectors.json",
+      "sha256": "6503af2f01e94222e15d1f93debd3e2e7e76d3e7913055433fc8087f095b09cc"
+    },
+    {
+      "path": "docs/contracts/racket-phone-score-v1/app-vectors.json",
+      "source_path": "docs/contracts/racket-phone-score-v1/app-vectors.json",
+      "sha256": "2caddc7781d273c9962d51bff275c238829fb9621f1a3dbf4b45abe675fe11b0"
+    },
+    {
+      "path": "docs/contracts/racket-journal-archive-v1/vectors.json",
+      "source_path": "docs/contracts/racket-journal-archive-v1/vectors.json",
+      "sha256": "e50dd15774a857528b66d15c3456097b18ed8e5e9a3baf44749196c32211d8f3"
+    },
+    {
+      "path": "docs/contracts/racket-dual-host-v1/vectors.json",
+      "source_path": "docs/contracts/racket-dual-host-v1/vectors.json",
+      "sha256": "2bd7c310f8761352f8f81b613aba8c6dfeb510a9f929f9e7da3fe1f707c41b64"
+    },
+    {
+      "path": "docs/contracts/racket-ble-v1/vector.json",
+      "source_path": "docs/contracts/racket-ble-v1/vector.json",
+      "sha256": "555e23750ce382dbd1f84543f5a071bad50b701725ff6d6ba3bad2288d9170f1"
+    },
+    {
+      "path": "docs/handoff/2026-10-27-racket-ble-v2-proposal-vectors.json",
+      "source_path": "docs/handoff/2026-10-27-racket-ble-v2-proposal-vectors.json",
+      "sha256": "706e7cdc022fa0d452537038f5c05d185be26f69a367ea8b89ca04d247f2c5c3"
+    }
+  ]
+}

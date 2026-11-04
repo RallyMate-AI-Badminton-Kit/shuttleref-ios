@@ -1,0 +1,11 @@
+name: iOS host checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  host-tests:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 Tools/verify_support.py
+      - run: bash Tools/test_phone_score.sh

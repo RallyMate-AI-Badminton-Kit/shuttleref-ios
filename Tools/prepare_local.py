@@ -1,4 +1,5 @@
 """Prepare ignored iOS credentials and SDK from the user's local configuration."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -6,8 +7,12 @@ import shutil
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
-repo = root.parents[1]
-config = repo / 'config/local/ios-sdk.env'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--config', type=Path, default=root / 'config/local/ios-sdk.env')
+args = parser.parse_args()
+config = args.config.expanduser().resolve()
+if not config.is_file():
+    raise SystemExit('Missing local configuration; copy config/ios-sdk.env.example to config/local/ios-sdk.env and fill in your own values.')
 values = {}
 for line in config.read_text().splitlines():
     line = line.strip()

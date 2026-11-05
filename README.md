@@ -1,5 +1,10 @@
 # RallyMate · 羽小裁 iOS
 
+<!-- team-handbook:start -->
+> 团队协作：[成员入口](https://github.com/RallyMate-AI-Badminton-Kit/.github-private/blob/main/profile/README.md) · [开发与合并规范](https://github.com/RallyMate-AI-Badminton-Kit/.github-private/blob/main/handbook/workflow.md) · [负责人认领](https://github.com/RallyMate-AI-Badminton-Kit/.github-private/blob/main/handbook/ownership.md)
+<!-- team-handbook:end -->
+
+
 闭源团队项目的原生 iPhone 客户端，SwiftUI / CoreBluetooth / 涂鸦 Smart Life App SDK。最低 iOS 15，iPhone 竖屏。此仓库维护 App、客户端业务逻辑、资源及测试。
 
 ## 开发入口

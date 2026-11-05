@@ -1,4 +1,4 @@
-# RallyMate · 羽小裁 iOS
+# RallyMate · 随芯拍 iOS
 
 <!-- team-handbook:start -->
 > 团队协作：[成员入口](https://github.com/RallyMate-AI-Badminton-Kit/.github-private/blob/main/profile/README.md) · [开发与合并规范](https://github.com/RallyMate-AI-Badminton-Kit/.github-private/blob/main/handbook/workflow.md) · [负责人认领](https://github.com/RallyMate-AI-Badminton-Kit/.github-private/blob/main/handbook/ownership.md)
